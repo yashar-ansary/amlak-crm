@@ -102,6 +102,7 @@ export const VoicePropertyModal: React.FC<VoicePropertyModalProps> = ({
   const soundRecorderRef = useRef<SoundRecorder | null>(null);
   const timerIntervalRef = useRef<any>(null);
   const audioElementRef = useRef<HTMLAudioElement | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
   // پردازش مجدد متن توسط تجزیه‌گر هوشمند
   const handleReprocessText = useCallback((textToProcess?: string) => {
@@ -367,46 +368,25 @@ export const VoicePropertyModal: React.FC<VoicePropertyModalProps> = ({
     };
   }, [isRecording]);
 
-  // ۱. شروع ضبط و تایپ همزمان با درخواست صریح مجوز میکروفون در آیفون، اندروید و دسکتاپ
-  const handleStartRecording = async () => {
+  // ۱. شروع مستقیم و همگام ضبط و تایپ در همان رویداد لمس کاربر (حفظ قطعی User Gesture در سافاری آیفون)
+  const handleStartRecording = () => {
     setErrorMessage('');
     setSpeechNotice('');
     setSuccessSaved(false);
     networkErrorCountRef.current = 0;
 
-    // بررسی بستر امن HTTPS
-    if (!isSecureContextEnvironment()) {
-      setSpeechNotice('هشدار امنیتی: مرورگرها فقط در پروتکل امن HTTPS با گواهی معتبر یا localhost اجازه دسترسی به میکروفون را صادر می‌کنند.');
-    }
-
-    // درخواست صریح دسترسی به میکروفون در رویداد کلیک کاربر (تضمین نمایش دیالوگ اجازه در سافاری آیفون)
-    if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        // بلافاصله آزاد کردن ترک‌ها تا سخت‌افزار صدا برای SpeechRecognition در وب‌کیت آزاد باشد
-        stream.getTracks().forEach((track) => track.stop());
-      } catch (permErr: any) {
-        console.warn('Microphone permission check error:', permErr);
-        if (permErr.name === 'NotAllowedError' || permErr.name === 'PermissionDeniedError') {
-          setErrorMessage(
-            isIOSDevice()
-              ? 'اجازه دسترسی به میکروفون در آیفون داده نشد. لطفاً در تنظیمات آیفون (Settings > Safari > Microphone) دسترسی را روی Allow بگذارید یا در نوار آدرس روی دکمه تنظیمات وب‌سایت کلیک کنید.'
-              : 'دسترسی به میکروفون مجاز نشد. لطفاً در تنظیمات مرورگر اجازه استفاده از میکروفون را فعال فرمایید.'
-          );
-          setIsRecording(false);
-          return;
-        }
-      }
-    }
-
     // بررسی پشتیبانی SpeechRecognition API در مرورگر
     if (!isWebSpeechSupported()) {
       setErrorMessage(
         isIOSDevice()
-          ? 'سرویس تشخیص گفتار وب در این مرورگر فعال نیست. می‌توانید مشخصات ملک را در کادر زیر بنویسید یا از دکمه میکروفون کیبورد آیفون (🎙️) استفاده فرمایید.'
-          : 'مرورگر شما از SpeechRecognition API پشتیبانی نمی‌کند. لطفاً از مرورگر گوگل کروم، مایکروسافت اج یا سافاری استفاده فرمایید، یا متن را در کادر زیر بنویسید.'
+          ? 'سرویس تشخیص گفتار وب در این مرورگر فعال نیست. لطفاً از دکمه «تایپ با کیبورد آیفون» استفاده فرمایید یا مشخصات را در کادر بنویسید.'
+          : 'مرورگر شما از SpeechRecognition API پشتیبانی نمی‌کند. لطفاً از مرورگر گوگل کروم، مایکروسافت اج یا سافاری استفاده فرمایید.'
       );
       return;
+    }
+
+    if (!isSecureContextEnvironment()) {
+      setSpeechNotice('هشدار امنیتی: مرورگرها فقط در پروتکل امن HTTPS با گواهی معتبر یا localhost اجازه دسترسی به میکروفون را صادر می‌کنند.');
     }
 
     // آماده‌سازی وضعیت‌ها
@@ -422,8 +402,17 @@ export const VoicePropertyModal: React.FC<VoicePropertyModalProps> = ({
     setIsRecording(true);
     setRecordingSeconds(0);
 
-    // شروع مستقیم نمونه SpeechRecognition
+    // شروع مستقیم نمونه SpeechRecognition در همان کلیک بدون await تا ژست کاربر در وب‌کیت ابطال نشود
     startRecognitionInstance();
+  };
+
+  // باز کردن مستقیم کیبورد و تمرکز روی کادر متن برای تایپ صوتی با کیبورد آیفون
+  const handleOpenIphoneDictation = () => {
+    if (textareaRef.current) {
+      textareaRef.current.focus();
+      textareaRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+    setSpeechNotice('کیبورد آیفون فعال شد! روی علامت میکروفون (🎙️) روی کیبورد خود ضربه بزنید و مشخصات ملک را بیان کنید تا به صورت زنده استخراج شود.');
   };
 
   // ۲. توقف ضبط و استخراج هوشمند مشخصات ملک (۱۰۰٪ محلی و آفلاین)
@@ -736,6 +725,16 @@ export const VoicePropertyModal: React.FC<VoicePropertyModalProps> = ({
                   <p className="text-xs text-slate-500 dark:text-slate-400">
                     تایپ همزمان در حین تکلم • درج تکه‌ای و بدون تکرار کلمات در اندروید و دسکتاپ
                   </p>
+                  {isIOSDevice() && (
+                    <button
+                      type="button"
+                      onClick={handleOpenIphoneDictation}
+                      className="mt-3.5 px-4 py-2.5 rounded-xl bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 text-white text-xs font-bold flex items-center justify-center gap-2 shadow-md shadow-indigo-500/25 transition transform active:scale-95"
+                    >
+                      <Sparkles className="w-4 h-4 text-amber-300" />
+                      <span>تایپ صوتی مستقیم با کیبورد آیفون (🎙️ Dictation)</span>
+                    </button>
+                  )}
                 </>
               )}
             </div>
@@ -848,6 +847,7 @@ export const VoicePropertyModal: React.FC<VoicePropertyModalProps> = ({
             </div>
             <div className="relative">
               <textarea
+                ref={textareaRef}
                 rows={3}
                 value={transcript}
                 onChange={(e) => {

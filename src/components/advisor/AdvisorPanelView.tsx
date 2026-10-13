@@ -346,28 +346,7 @@ export const AdvisorPanelView: React.FC = () => {
       setRecordingSeconds((s) => s + 1);
     }, 1000);
 
-    // درخواست صریح دسترسی به میکروفون در همان رویداد لمس کاربر (حیاتی برای iOS Safari)
-    if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        stream.getTracks().forEach((track) => track.stop());
-      } catch (permErr: any) {
-        console.warn('Microphone permission check error:', permErr);
-        if (permErr.name === 'NotAllowedError' || permErr.name === 'PermissionDeniedError') {
-          setVoiceNotice(
-            isIOSDevice()
-              ? 'دسترسی به میکروفون در آیفون داده نشد. لطفاً در تنظیمات سافاری (Settings > Safari > Microphone) دسترسی را فعال فرمایید.'
-              : 'دسترسی به میکروفون مجاز نشد. لطفاً در تنظیمات مرورگر اجازه استفاده از میکروفون را فعال فرمایید.'
-          );
-          setIsRecording(false);
-          isRecordingRef.current = false;
-          if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
-          return;
-        }
-      }
-    }
-
-    // ۱. راه‌اندازی تایپ مستقیم گفتار با LiveSpeechRecognizer (تایپ ریل‌تایم، بدون تکرار کلمات در اندروید و دسکتاپ)
+    // ۱. راه‌اندازی تایپ مستقیم گفتار با LiveSpeechRecognizer به صورت کاملاً همگام جهت حفظ User Gesture در سافاری آیفون
     if (isWebSpeechSupported()) {
       try {
         const recognizer = new LiveSpeechRecognizer('fa-IR');
