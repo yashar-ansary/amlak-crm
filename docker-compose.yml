@@ -7,6 +7,8 @@ services:
     restart: unless-stopped
     ports:
       - "3000:3000"
+    networks:
+    - proxy
     environment:
       - NODE_ENV=production
       - PORT=3000
@@ -19,3 +21,7 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
+networks:
+  proxy:
+    external: true
+    name: proxy
