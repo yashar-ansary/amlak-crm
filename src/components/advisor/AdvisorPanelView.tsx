@@ -336,6 +336,18 @@ export const AdvisorPanelView: React.FC = () => {
     setVoiceTranscript('');
     setConfirmedVoiceTranscript('');
     setInterimVoiceTranscript('');
+
+    // درخواست صریح دسترسی به میکروفون (ضروری برای سافاری آیفون جهت باز شدن پنجره دسترسی میکروفون)
+    const hasMicPermission = await requestMicrophonePermission();
+    if (!hasMicPermission) {
+      setVoiceNotice(
+        isIOSDevice()
+          ? 'دسترسی به میکروفون در آیفون تایید نشد. لطفاً در پنجره باز شده دکمه Allow را بزنید یا در تنظیمات آیفون (Settings > Safari > Microphone) دسترسی را فعال فرمایید.'
+          : 'دسترسی به میکروفون مجاز نشد. لطفاً در مرورگر اجازه دسترسی به میکروفون را فعال فرمایید.'
+      );
+      return;
+    }
+
     setIsRecording(true);
     isRecordingRef.current = true;
     setRecordingSeconds(0);
@@ -346,7 +358,7 @@ export const AdvisorPanelView: React.FC = () => {
       setRecordingSeconds((s) => s + 1);
     }, 1000);
 
-    // ۱. راه‌اندازی تایپ مستقیم گفتار با LiveSpeechRecognizer به صورت کاملاً همگام جهت حفظ User Gesture در سافاری آیفون
+    // ۱. راه‌اندازی تایپ مستقیم گفتار با LiveSpeechRecognizer
     if (isWebSpeechSupported()) {
       try {
         const recognizer = new LiveSpeechRecognizer('fa-IR');

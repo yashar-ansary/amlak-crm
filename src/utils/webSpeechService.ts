@@ -287,10 +287,9 @@ export class LiveSpeechRecognizer {
       recognition.lang = this.lang;
       recognition.interimResults = true;
       recognition.maxAlternatives = 1;
-      // در کروم اندروید و همچنین iOS سافاری، continuous باید false باشد
-      // ۱. در اندروید برای جلوگیری قطعی از باگ تکرار کلمات
-      // ۲. در iOS سافاری، continuous: true باعث لغو فوری و مسدود شدن موتور وب‌کیت می‌گردد
-      recognition.continuous = !isAndroidDevice() && !isIOSDevice();
+      // در کروم اندروید continuous: false مانع از باگ تکرار کلمات می‌شود
+      // در دسکتاپ و iOS سافاری continuous: true امکان صحبت پیوسته را فراهم می‌کند
+      recognition.continuous = !isAndroidDevice();
 
       recognition.onresult = (event: any) => {
         if (!this.isListening) return;

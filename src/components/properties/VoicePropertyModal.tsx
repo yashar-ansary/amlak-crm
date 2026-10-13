@@ -178,10 +178,9 @@ export const VoicePropertyModal: React.FC<VoicePropertyModalProps> = ({
       recognition.lang = 'fa-IR';
       recognition.interimResults = true;
       recognition.maxAlternatives = 1;
-      // در کروم اندروید و همچنین iOS سافاری، continuous باید false باشد:
-      // در اندروید مانع از باگ تکرار کلمات می‌شود
-      // در iOS سافاری، continuous: true موجب لغو فوری و مسدود شدن موتور وب‌کیت می‌گردد
-      recognition.continuous = !isAndroidDevice() && !isIOSDevice();
+      // در کروم اندروید continuous: false مانع از باگ تکرار کلمات می‌شود
+      // در دسکتاپ و iOS سافاری continuous: true تایپ پیوسته و بدون قطعی در حین صحبت را فراهم می‌کند
+      recognition.continuous = !isAndroidDevice();
 
       recognition.onresult = handleSpeechResult;
 
@@ -211,7 +210,7 @@ export const VoicePropertyModal: React.FC<VoicePropertyModalProps> = ({
           setIsRecording(false);
           setErrorMessage(
             isIOSDevice()
-              ? 'دسترسی به میکروفون در آیفون تایید نشد. لطفاً در تنظیمات سافاری (Settings > Safari > Microphone) دسترسی را مجاز فرمایید.'
+              ? 'دسترسی به میکروفون در آیفون تایید نشد. لطفاً در پنجره باز شده گزینه Allow را بزنید یا در تنظیمات آیفون (Settings > Safari > Microphone) دسترسی را فعال فرمایید.'
               : 'دسترسی به میکروفون مجاز نیست. لطفاً در نوار آدرس مرورگر روی علامت قفل یا میکروفون کلیک کرده و دسترسی را مجاز (Allow) فرمایید.'
           );
           return;
@@ -219,7 +218,7 @@ export const VoicePropertyModal: React.FC<VoicePropertyModalProps> = ({
 
         if (error === 'language-not-supported') {
           console.warn('Language fa-IR notice on iOS Safari');
-          setSpeechNotice('دیکته صوتی فارسی سیستم‌عامل در این نسخه از آیفون در دسترس نیست. می‌توانید داخل کادر متن زیر لمس فرمایید و از دکمه میکروفون روی کیبورد آیفون استفاده کنید.');
+          setErrorMessage('زبان فارسی توسط موتور تشخیص گفتار مرورگر این دستگاه پشتیبانی نمی‌شود. لطفاً از مرورگر سافاری یا کروم به‌روز استفاده فرمایید یا متن را در کادر بنویسید.');
           return;
         }
 
@@ -229,7 +228,7 @@ export const VoicePropertyModal: React.FC<VoicePropertyModalProps> = ({
           if (networkErrorCountRef.current >= 2) {
             shouldKeepListeningRef.current = false;
             setIsRecording(false);
-            setSpeechNotice('سرویس آنلاین تشخیص گفتار کروم با خطای شبکه مواجه شد (احتمالاً به دلیل فیلترینگ یا عدم دسترسی به سرورهای گوگل). می‌توانید متن را در کادر زیر بنویسید یا از کیبورد صوتی گوشی استفاده فرمایید.');
+            setSpeechNotice('سرویس آنلاین تشخیص گفتار مرورگر با خطای شبکه مواجه شد. لطفاً اتصال اینترنت خود را بررسی فرمایید.');
           }
           return;
         }
@@ -368,8 +367,8 @@ export const VoicePropertyModal: React.FC<VoicePropertyModalProps> = ({
     };
   }, [isRecording]);
 
-  // ۱. شروع مستقیم و همگام ضبط و تایپ در همان رویداد لمس کاربر (حفظ قطعی User Gesture در سافاری آیفون)
-  const handleStartRecording = () => {
+  // ۱. شروع مستقیم ضبط و تایپ همزمان با درخواست استاندارد دسترسی به میکروفون (اجرای صریح در آیفون، اندروید و دسکتاپ)
+  const handleStartRecording = async () => {
     setErrorMessage('');
     setSpeechNotice('');
     setSuccessSaved(false);
@@ -377,16 +376,23 @@ export const VoicePropertyModal: React.FC<VoicePropertyModalProps> = ({
 
     // بررسی پشتیبانی SpeechRecognition API در مرورگر
     if (!isWebSpeechSupported()) {
-      setErrorMessage(
-        isIOSDevice()
-          ? 'سرویس تشخیص گفتار وب در این مرورگر فعال نیست. لطفاً از دکمه «تایپ با کیبورد آیفون» استفاده فرمایید یا مشخصات را در کادر بنویسید.'
-          : 'مرورگر شما از SpeechRecognition API پشتیبانی نمی‌کند. لطفاً از مرورگر گوگل کروم، مایکروسافت اج یا سافاری استفاده فرمایید.'
-      );
+      setErrorMessage('مرورگر شما از SpeechRecognition API پشتیبانی نمی‌کند. لطفاً از مرورگر گوگل کروم، مایکروسافت اج یا سافاری استفاده فرمایید.');
       return;
     }
 
     if (!isSecureContextEnvironment()) {
       setSpeechNotice('هشدار امنیتی: مرورگرها فقط در پروتکل امن HTTPS با گواهی معتبر یا localhost اجازه دسترسی به میکروفون را صادر می‌کنند.');
+    }
+
+    // درخواست صریح دسترسی به میکروفون در همان لمس کاربر (حیاتی برای آیفون جهت باز شدن پنجره دسترسی میکروفون)
+    const hasMicPermission = await requestMicrophonePermission();
+    if (!hasMicPermission) {
+      setErrorMessage(
+        isIOSDevice()
+          ? 'دسترسی به میکروفون در آیفون تایید نشد. لطفاً در پنجره باز شده گزینه Allow را بزنید یا در تنظیمات آیفون (Settings > Safari > Microphone) دسترسی را فعال فرمایید.'
+          : 'دسترسی به میکروفون تایید نشد. لطفاً در پنجره مرورگر اجازه دسترسی (Allow) را صادر فرمایید.'
+      );
+      return;
     }
 
     // آماده‌سازی وضعیت‌ها
@@ -402,17 +408,8 @@ export const VoicePropertyModal: React.FC<VoicePropertyModalProps> = ({
     setIsRecording(true);
     setRecordingSeconds(0);
 
-    // شروع مستقیم نمونه SpeechRecognition در همان کلیک بدون await تا ژست کاربر در وب‌کیت ابطال نشود
+    // شروع مستقیم نمونه SpeechRecognition
     startRecognitionInstance();
-  };
-
-  // باز کردن مستقیم کیبورد و تمرکز روی کادر متن برای تایپ صوتی با کیبورد آیفون
-  const handleOpenIphoneDictation = () => {
-    if (textareaRef.current) {
-      textareaRef.current.focus();
-      textareaRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    }
-    setSpeechNotice('کیبورد آیفون فعال شد! روی علامت میکروفون (🎙️) روی کیبورد خود ضربه بزنید و مشخصات ملک را بیان کنید تا به صورت زنده استخراج شود.');
   };
 
   // ۲. توقف ضبط و استخراج هوشمند مشخصات ملک (۱۰۰٪ محلی و آفلاین)
@@ -475,11 +472,7 @@ export const VoicePropertyModal: React.FC<VoicePropertyModalProps> = ({
           }
         }
       } else {
-        if (isIOSDevice()) {
-          setErrorMessage('صدایی دریافت نشد یا صحبت خیلی کوتاه بود. در آیفون می‌توانید داخل کادر متن زیر لمس کنید و از علامت میکروفون روی کیبورد آیفون (🎙️ Dictation) برای تایپ صوتی مشخصات ملک استفاده فرمایید.');
-        } else {
-          setErrorMessage('صدایی دریافت نشد یا صحبت خیلی کوتاه بود. لطفاً بلندتر صحبت فرمایید یا مشخصات را در کادر بنویسید.');
-        }
+        setErrorMessage('صدایی دریافت نشد یا صحبت خیلی کوتاه بود. لطفاً مجدداً دکمه شروع ضبط را بزنید و واضح‌تر صحبت فرمایید یا مشخصات را در کادر بنویسید.');
       }
     } catch (err: any) {
       console.warn('Local parser fallback active:', err);
@@ -723,18 +716,8 @@ export const VoicePropertyModal: React.FC<VoicePropertyModalProps> = ({
                     برای شروع، دکمه میکروفون را لمس کنید و صحبت کنید
                   </h4>
                   <p className="text-xs text-slate-500 dark:text-slate-400">
-                    تایپ همزمان در حین تکلم • درج تکه‌ای و بدون تکرار کلمات در اندروید و دسکتاپ
+                    تایپ همزمان در حین تکلم • سیستم هوشمند استخراج مشخصات ملک
                   </p>
-                  {isIOSDevice() && (
-                    <button
-                      type="button"
-                      onClick={handleOpenIphoneDictation}
-                      className="mt-3.5 px-4 py-2.5 rounded-xl bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 text-white text-xs font-bold flex items-center justify-center gap-2 shadow-md shadow-indigo-500/25 transition transform active:scale-95"
-                    >
-                      <Sparkles className="w-4 h-4 text-amber-300" />
-                      <span>تایپ صوتی مستقیم با کیبورد آیفون (🎙️ Dictation)</span>
-                    </button>
-                  )}
                 </>
               )}
             </div>
@@ -809,15 +792,6 @@ export const VoicePropertyModal: React.FC<VoicePropertyModalProps> = ({
             )}
           </div>
 
-          {/* راهنمای اختصاصی آیفون */}
-          {isIOSDevice() && (
-            <div className="p-3 rounded-xl bg-indigo-50/70 dark:bg-indigo-950/40 border border-indigo-200/70 dark:border-indigo-800/60 flex items-start gap-2.5 text-xs text-indigo-800 dark:text-indigo-200 animate-fadeIn">
-              <Sparkles className="w-4 h-4 text-indigo-500 shrink-0 mt-0.5" />
-              <p className="leading-relaxed">
-                <strong>کاربر گرامی آیفون:</strong> علاوه بر فشردن دکمه ضبط بالا، می‌توانید کادر متن زیر را لمس کرده و با زدن دکمه میکروفون کیبورد آیفون (🎙️ Dictation)، مستقیماً با صوت فارسی تایپ فرمایید.
-              </p>
-            </div>
-          )}
 
           {/* کادر متن پیاده‌شده و ویرایشگر */}
           <div className="space-y-2">
