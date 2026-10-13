@@ -137,7 +137,12 @@ export class SoundRecorder {
       }
     };
 
-    recorder.start(100); // ارسال چانک‌ها هر ۱۰۰ میلی‌ثانیه
+    // در مرورگر سافاری آیفون برای فرمت‌های mp4 و aac نباید از timeslice استفاده شود تا ساختار متادیتا سالم بماند
+    if (mime && (mime.includes('mp4') || mime.includes('aac'))) {
+      recorder.start();
+    } else {
+      recorder.start(500);
+    }
     this.isRecording = true;
     this.startTime = Date.now();
   }

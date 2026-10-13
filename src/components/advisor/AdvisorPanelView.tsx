@@ -400,7 +400,7 @@ export const AdvisorPanelView: React.FC = () => {
     mimeType: string,
     spokenText: string
   ) => {
-    const cleanSpoken = (spokenText || '').trim();
+    let cleanSpoken = (spokenText || '').trim();
 
     if (!cleanSpoken && !audioDataUrl) {
       setIsProcessingVoice(false);
@@ -428,6 +428,12 @@ export const AdvisorPanelView: React.FC = () => {
 
         if (response.ok) {
           const resData = await response.json();
+          if (resData.transcript) {
+            cleanSpoken = resData.transcript;
+            spokenText = resData.transcript;
+            setVoiceTranscript(resData.transcript);
+            setTypedVoiceInput(resData.transcript);
+          }
           if (resData.parsedTask && resData.parsedTask.title && resData.parsedTask.dateJalali) {
             parsed = {
               title: resData.parsedTask.title,
@@ -440,21 +446,19 @@ export const AdvisorPanelView: React.FC = () => {
               propertyCode: resData.parsedTask.propertyCode,
               confidenceScore: 95,
             };
-            if (!cleanSpoken && resData.transcript) {
-              spokenText = resData.transcript;
-            }
           }
         }
       } catch (apiErr) {
         console.warn('API voice task parse fallback:', apiErr);
       }
 
-      // ۲. در صورت بروز هرگونه مشکل شبکه، استفاده آنی از پارسر محلی فوق‌دقیق
+      // ۲. در صورت نیاز، پردازش با موتور محلی تقویم جلالی
       if (!parsed) {
         parsed = parseVoiceDailyTask(cleanSpoken, todayStr);
       }
 
       const targetDate = parsed.dateJalali || todayStr;
+      const finalRecordedText = spokenText || cleanSpoken || parsed.title;
 
       // ثبت کار روزانه در تقویم
       const newTask = addDailyTask({
@@ -471,15 +475,16 @@ export const AdvisorPanelView: React.FC = () => {
         propertyCode: parsed.propertyCode,
         hasVoiceRecording: Boolean(audioDataUrl),
         voiceAudioUrl: audioDataUrl,
-        voiceTranscript: spokenText || cleanSpoken,
+        voiceTranscript: finalRecordedText,
       });
 
       // جابجایی خودکار تقویم و باز شدن روی همان روز و ماهی که کار برای آن ثبت شده
       selectDateAndSyncCalendar(targetDate);
 
-      setVoiceNotice(`کار با موفقیت در تاریخ «${formatJalaliWithWeekday(targetDate)}» ثبت شد: «${newTask.title}»`);
-      setVoiceTranscript('');
+      // متن پیاده‌شده در کادر نمایش داده می‌شود تا کاربر دقیقاً ببیند چه متنی ثبت شده
+      setVoiceTranscript(finalRecordedText);
       setTypedVoiceInput('');
+      setVoiceNotice(`کار با موفقیت در تاریخ «${formatJalaliWithWeekday(targetDate)}» ثبت شد: «${newTask.title}»`);
     } catch (err: any) {
       setVoiceNotice('خطا در پردازش صوت: ' + (err.message || 'نامشخص'));
     } finally {

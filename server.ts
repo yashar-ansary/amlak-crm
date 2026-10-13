@@ -11,6 +11,7 @@ import {
   parseVoiceDailyTask,
   normalizeJalaliDateString,
 } from './src/utils/voiceTaskParser';
+import { getCurrentJalaliDate } from './src/utils/jalali';
 dotenv.config();
 
 const __filename = fileURLToPath(import.meta.url);
@@ -224,10 +225,13 @@ async function transcribeAudioBase64(audioBase64: string, mimeType: string = 'au
 
   try {
     const { GoogleGenAI } = await import('@google/genai');
-    const ai = new GoogleGenAI();
+    const ai = new GoogleGenAI({
+      apiKey: process.env.GEMINI_API_KEY,
+      httpOptions: { headers: { 'User-Agent': 'aistudio-build' } },
+    });
     const cleanMime = mimeType && mimeType.includes(';') ? mimeType.split(';')[0] : (mimeType || 'audio/mp4');
     const response = await ai.models.generateContent({
-      model: 'gemini-3.5-transcribe',
+      model: 'gemini-3.8-flash',
       contents: [
         {
           inlineData: {
@@ -235,7 +239,7 @@ async function transcribeAudioBase64(audioBase64: string, mimeType: string = 'au
             data: audioBase64,
           },
         },
-        'شما سیستم تبدیل صوت به متن فارسی برای سامانه املاک هستید. تمام کلمات، اعداد، قیمت‌ها، متراژ، نوع ملک و آدرس‌هایی که در این صوت فارسی گفته می‌شود را با دقت بسیار بالا و املای صحیح فارسی پیاده‌سازی و تایپ کنید. فقط متن نهایی پیاده‌شده را بدون هیچ توضیح اضافه یا مقدمه‌ای بنویسید.',
+        'لطفاً فایل صوتی فارسی را با دقت بسیار بالا پیاده‌سازی و تایپ کنید. تمام کلمات، جملات، تاریخ‌های شمسی (مانند ۲۵ مهر)، روزهای هفته، ساعت‌ها، نام اشخاص و جزئیات کار یا ملک را عیناً و با املای دقیق فارسی بنویسید. فقط متن فارسی پیاده‌شده را خروجی دهید و هیچ مقدمه یا توضیح اضافه‌ای ننویسید.',
       ],
     });
 
@@ -333,7 +337,7 @@ app.post('/api/parse-voice-task', async (req, res) => {
   let cleanInputText = (typeof text === 'string' ? text.trim() : '') || '';
   const baseJalali = typeof currentJalaliDate === 'string' && currentJalaliDate.includes('/')
     ? currentJalaliDate.trim()
-    : '1405/07/18';
+    : getCurrentJalaliDate();
 
   // در صورتی که متن خالی است اما فایل صوتی ارسال شده است (آیفون)
   if (!cleanInputText && audioBase64) {
