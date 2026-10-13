@@ -265,9 +265,9 @@ export class LiveSpeechRecognizer {
       recognition.lang = this.lang;
       recognition.interimResults = true;
       recognition.maxAlternatives = 1;
-      // بسیار مهم: continuous: false برای جلوگیری از باگ تکرار کلمات در کروم اندروید
-      // و حفظ پایداری کامل در iOS Safari
-      recognition.continuous = false;
+      // در کروم اندروید continuous: false مانع از باگ تکرار کلمات می‌شود
+      // در دسکتاپ و iOS سافاری continuous: true جریان پیوسته و بدون قطعی کلمات را فراهم می‌کند
+      recognition.continuous = !isAndroidDevice();
 
       recognition.onresult = (event: any) => {
         if (!this.isListening) return;
@@ -312,9 +312,15 @@ export class LiveSpeechRecognizer {
         const error = event.error;
         console.warn('SpeechRecognition notice:', error);
 
-        if (error === 'not-allowed') {
+        if (error === 'not-allowed' || error === 'service-not-allowed') {
           this.isListening = false;
           this.onErrorCallback?.('دسترسی به میکروفون داده نشد. لطفاً در تنظیمات مرورگر مجوز میکروفون را فعال نمایید.', true);
+          return;
+        }
+
+        if (error === 'network') {
+          this.isListening = false;
+          this.onErrorCallback?.('سرور گفتار گوگل در این شبکه در دسترس نیست (خطای network). ضبط مستقیم صدا ادامه دارد.', false);
           return;
         }
 

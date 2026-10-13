@@ -1,0 +1,79 @@
+# ====================================================================
+# تنظیمات استاندارد و بهینه Nginx Reverse Proxy برای سامانه مدیریت املاک (ParsMelk CRM)
+# بهینه‌سازی شده برای اجرای Docker، گواهی SSL، ضبط صدا و تایپ صوتی (Microphone & Web Speech API)
+# ====================================================================
+
+# ۱. ریدایرکت خودکار ترافیک HTTP به HTTPS (حیاتی برای دسترسی مرورگر به میکروفون)
+server {
+    listen 80;
+    listen [::]:80;
+    server_name your-domain.com; # دامنه یا ساب‌دامنه خود را اینجا وارد کنید
+
+    # هدایت امن به HTTPS
+    return 301 https://$host$request_uri;
+}
+
+# ۲. کانفیگ اصلی سرور امن HTTPS
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name your-domain.com; # دامنه یا ساب‌دامنه خود را اینجا وارد کنید
+
+    # مسیر گواهی‌های معتبر SSL (به عنوان مثال Let's Encrypt با certbot)
+    ssl_certificate /etc/letsencrypt/live/your-domain.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/your-domain.com/privkey.pem;
+
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:DHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384;
+    ssl_prefer_server_ciphers off;
+    ssl_session_timeout 1d;
+    ssl_session_cache shared:SSL:10m;
+    ssl_session_tickets off;
+
+    # -------------------------------------------------------------
+    # نکته حیاتی ۱: افزایش حجم مجاز ارسال فایل‌های صوتی به سرور
+    # پیش‌فرض Nginx فقط ۱ مگابایت است. ارسال صوت Base64 به کانتینر نیاز به ۵۰ مگابایت دارد.
+    # در صورت نبود این خط، خطای HTTP 413 (Payload Too Large) رخ می‌دهد و صدا دریافت نمی‌شود.
+    # -------------------------------------------------------------
+    client_max_body_size 50M;
+
+    # -------------------------------------------------------------
+    # نکته حیاتی ۲: مجوز صریح دسترسی به میکروفون در هدر امنیتی مرورگر
+    # اگر در سرور قبلاً هدر Permissions-Policy با مقدار microphone=() تنظیم شده بود،
+    # مرورگر میکروفون را مسدود می‌کرد. این خط مجوز میکروفون را صادر می‌کند:
+    # -------------------------------------------------------------
+    add_header Permissions-Policy "microphone=(self)" always;
+
+    # سایر هدرهای استاندارد امنیتی
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header X-XSS-Protection "1; mode=block" always;
+
+    location / {
+        # اتصال به کانتینر داکر اپلیکیشن روی پورت ۳۰۰۰
+        proxy_pass http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+
+        # هدرهای مورد نیاز وب‌سوکت و ارتقای ارتباط
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+
+        # انتقال دقیق هدرهای هاست و شبکه
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+
+        # ---------------------------------------------------------
+        # نکته حیاتی ۳: اعلام پروتکل امن HTTPS به کلاینت و بک‌اند
+        # مرورگرها تنها در صورت تأیید پروتکل امن HTTPS مجوز میکروفون و Web Speech می‌دهند.
+        # ---------------------------------------------------------
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Forwarded-Ssl on;
+
+        # تایم‌اوت‌های مناسب برای تحلیل صوت‌های طولانی با هوش مصنوعی
+        proxy_connect_timeout 90s;
+        proxy_send_timeout 300s;
+        proxy_read_timeout 300s;
+        proxy_buffering off;
+    }
+}

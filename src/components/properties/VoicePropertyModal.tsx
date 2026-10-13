@@ -28,6 +28,7 @@ import {
   Calendar,
   DollarSign,
   ShieldCheck,
+  Info,
 } from 'lucide-react';
 import { SoundRecorder, RecordedAudioResult } from '../../utils/audioRecorder';
 import { useCrm } from '../../context/CrmContext';
@@ -50,6 +51,7 @@ import {
   deduplicateAdjacentWords,
   getCleanInterimText,
   isSecureContextEnvironment,
+  isAndroidDevice,
 } from '../../utils/webSpeechService';
 
 interface VoicePropertyModalProps {
@@ -81,6 +83,7 @@ export const VoicePropertyModal: React.FC<VoicePropertyModalProps> = ({
   const [parsedProperty, setParsedProperty] = useState<ParsedVoiceProperty | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
+  const [speechNotice, setSpeechNotice] = useState('');
   const [successSaved, setSuccessSaved] = useState(false);
 
   // رفرنس‌ها برای مدیریت رویدادهای غیرهمگام SpeechRecognition بدون تکرار کلمه
@@ -90,6 +93,7 @@ export const VoicePropertyModal: React.FC<VoicePropertyModalProps> = ({
   const isListeningRef = useRef(false);
   const shouldKeepListeningRef = useRef(false);
   const restartTimerRef = useRef<any>(null);
+  const networkErrorCountRef = useRef(0);
 
   const soundRecorderRef = useRef<SoundRecorder | null>(null);
   const timerIntervalRef = useRef<any>(null);
@@ -170,9 +174,9 @@ export const VoicePropertyModal: React.FC<VoicePropertyModalProps> = ({
       recognition.lang = 'fa-IR';
       recognition.interimResults = true;
       recognition.maxAlternatives = 1;
-      // استفاده از continuous: false برای جلوگیری از باگ تکرار کلمات در کروم اندروید
-      // و پایداری در مکث‌های گفتار با ری‌استارت هوشمند
-      recognition.continuous = false;
+      // در کروم اندروید continuous: false مانع از تکرار کلمات می‌شود
+      // در دسکتاپ و iOS سافاری continuous: true تایپ روان، پیوسته و بدون قطع شدن در حین صحبت را فراهم می‌کند
+      recognition.continuous = !isAndroidDevice();
 
       recognition.onresult = handleSpeechResult;
 
@@ -183,7 +187,22 @@ export const VoicePropertyModal: React.FC<VoicePropertyModalProps> = ({
         if (error === 'not-allowed' || error === 'service-not-allowed') {
           shouldKeepListeningRef.current = false;
           isListeningRef.current = false;
-          setErrorMessage('دسترسی به میکروفون یا سرویس صوتی رد شد. لطفاً در تنظیمات مرورگر اجازه دهید.');
+          setErrorMessage('دسترسی به میکروفون مجاز نیست. لطفاً در نوار آدرس مرورگر روی علامت قفل یا میکروفون کلیک کرده و دسترسی را مجاز (Allow) کنید.');
+          return;
+        }
+
+        if (error === 'network') {
+          networkErrorCountRef.current = (networkErrorCountRef.current || 0) + 1;
+          console.warn('SpeechRecognition network error count:', networkErrorCountRef.current);
+          if (networkErrorCountRef.current >= 2) {
+            shouldKeepListeningRef.current = false;
+            setSpeechNotice('سرور آنلاین تشخیص گفتار کروم (Google Speech) در این شبکه پاسخ نداد (احتمالاً به دلیل فیلترینگ یا عدم دسترسی اینترنت به گوگل). صدای شما به طور کامل ضبط می‌شود و با فشردن دکمه پایان، متن و اطلاعات فایل استخراج خواهد شد.');
+          }
+          return;
+        }
+
+        if (error === 'audio-capture') {
+          console.warn('Microphone hardware is busy or in use by recorder.');
           return;
         }
       };
@@ -210,7 +229,7 @@ export const VoicePropertyModal: React.FC<VoicePropertyModalProps> = ({
             if (shouldKeepListeningRef.current) {
               startRecognitionInstance();
             }
-          }, 70);
+          }, isAndroidDevice() ? 80 : 150);
         }
       };
 
@@ -269,6 +288,7 @@ export const VoicePropertyModal: React.FC<VoicePropertyModalProps> = ({
     interimTextRef.current = '';
     setParsedProperty(null);
     setErrorMessage('');
+    setSpeechNotice('');
     setSuccessSaved(false);
     setIsProcessing(false);
     if (audioElementRef.current) {
@@ -311,7 +331,9 @@ export const VoicePropertyModal: React.FC<VoicePropertyModalProps> = ({
   // ۱. شروع ضبط و تایپ همزمان با SpeechRecognition API
   const handleStartRecording = async () => {
     setErrorMessage('');
+    setSpeechNotice('');
     setSuccessSaved(false);
+    networkErrorCountRef.current = 0;
 
     // آماده‌سازی وضعیت‌ها
     confirmedTextRef.current = '';
@@ -323,12 +345,7 @@ export const VoicePropertyModal: React.FC<VoicePropertyModalProps> = ({
 
     shouldKeepListeningRef.current = true;
 
-    // شروع تایپ زنده گفتار با SpeechRecognition API
-    if (isWebSpeechSupported()) {
-      startRecognitionInstance();
-    }
-
-    // شروع ضبط موازی صدا برای ذخیره و فال‌بک
+    // شروع ضبط صدا با SoundRecorder (بررسی واقعی دسترسی میکروفون)
     try {
       const recorder = new SoundRecorder();
       soundRecorderRef.current = recorder;
@@ -339,20 +356,22 @@ export const VoicePropertyModal: React.FC<VoicePropertyModalProps> = ({
 
       setIsRecording(true);
     } catch (err: any) {
-      console.warn('Microphone recorder notice:', err);
-      if (isListeningRef.current || shouldKeepListeningRef.current) {
-        // اگر ضبط صوت فیزیکی به دلیل انحصار مرورگر مسدود شد ولی SpeechRecognition فعال است
-        setIsRecording(true);
+      console.warn('Microphone recorder error:', err);
+      if (err.message === 'SECURE_CONTEXT_REQUIRED' || !isSecureContextEnvironment()) {
+        setErrorMessage('توجه: مرورگرها دسترسی به میکروفون را فقط در پروتکل امن HTTPS با گواهی معتبر یا localhost مجاز می‌دانند. برای سرور داکر از دامنه با SSL معتبر استفاده کنید.');
+      } else if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+        setErrorMessage('دسترسی به میکروفون رد شد. لطفاً در نوار آدرس مرورگر روی علامت قفل یا میکروفون کلیک کرده و دسترسی را مجاز (Allow) فرمایید.');
       } else {
-        if (err.message === 'SECURE_CONTEXT_REQUIRED' || !isSecureContextEnvironment()) {
-          setErrorMessage('توجه: مرورگرها دسترسی به میکروفون را فقط در پروتکل امن HTTPS مجاز می‌دانند. برای عملکرد در سرور/داکر، آدرس باید دارای HTTPS باشد یا از دامنه با گواهی SSL استفاده کنید.');
-        } else if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
-          setErrorMessage('دسترسی به میکروفون رد شد. لطفاً در تنظیمات مرورگر اجازه استفاده از میکروفون را بدهید.');
-        } else {
-          setErrorMessage('خطا در دسترسی به میکروفون: ' + (err.message || 'نامشخص'));
-        }
-        setIsRecording(false);
+        setErrorMessage('خطا در دسترسی به میکروفون: ' + (err.message || 'نامشخص'));
       }
+      setIsRecording(false);
+      shouldKeepListeningRef.current = false;
+      return;
+    }
+
+    // شروع تایپ زنده گفتار با SpeechRecognition API
+    if (isWebSpeechSupported() && shouldKeepListeningRef.current) {
+      startRecognitionInstance();
     }
   };
 
@@ -382,7 +401,7 @@ export const VoicePropertyModal: React.FC<VoicePropertyModalProps> = ({
       confirmedTextRef.current = deduplicateAdjacentWords(merged);
       interimTextRef.current = '';
     }
-    const finalSpeechText = deduplicateAdjacentWords(confirmedTextRef.current || transcript);
+    let finalSpeechText = deduplicateAdjacentWords(confirmedTextRef.current || transcript);
     setConfirmedText(finalSpeechText);
     setInterimText('');
     setTranscript(finalSpeechText);
@@ -416,20 +435,28 @@ export const VoicePropertyModal: React.FC<VoicePropertyModalProps> = ({
       });
 
       if (!response.ok) {
-        throw new Error('پاسخ ناموفق از سرور پردازش');
+        if (response.status === 413) {
+          throw new Error('حجم فایل صوتی از محدودیت سرور Nginx بیشتر است. لطفاً در فایل nginx.conf مقدار client_max_body_size 50M; را تنظیم فرمایید.');
+        }
+        throw new Error(`پاسخ ناموفق از سرور پردازش (${response.status})`);
       }
 
       const data = await response.json();
-      const serverText = data.transcript || finalSpeechText;
+      const serverText = (data.transcript || '').trim();
       const cleanResultText = deduplicateAdjacentWords(serverText || finalSpeechText);
       setTranscript(cleanResultText);
+      setConfirmedText(cleanResultText);
 
       if (data.parsedProperty) {
         setParsedProperty(data.parsedProperty);
       } else if (cleanResultText) {
         const localParsed = parseVoicePropertyDescription(cleanResultText);
         setParsedProperty(localParsed);
-      } else {
+      }
+
+      if (!cleanResultText && !data.hasGemini) {
+        setSpeechNotice('صوت با موفقیت دریافت شد اما کلید GEMINI_API_KEY در فایل .env سرور داکر تنظیم نشده است. می‌توانید متن مشخصات ملک را در کادر زیر بنویسید یا کلید را در فایل .env سرور تنظیم نمایید.');
+      } else if (!cleanResultText) {
         setErrorMessage('صدایی دریافت نشد یا نویز پس‌زمینه بود. لطفاً بلندتر صحبت فرمایید یا مشخصات را تایپ نمایید.');
       }
     } catch (err: any) {
@@ -437,7 +464,10 @@ export const VoicePropertyModal: React.FC<VoicePropertyModalProps> = ({
       if (finalSpeechText) {
         const localParsed = parseVoicePropertyDescription(finalSpeechText);
         setParsedProperty(localParsed);
-      } else {
+      }
+      if (err.message?.includes('client_max_body_size') || err.message?.includes('413')) {
+        setErrorMessage(err.message);
+      } else if (!finalSpeechText) {
         setErrorMessage('خطا در پردازش صوت: ' + (err.message || 'ارتباط با سرور برقرار نشد'));
       }
     } finally {
@@ -602,6 +632,21 @@ export const VoicePropertyModal: React.FC<VoicePropertyModalProps> = ({
               <button
                 onClick={() => setErrorMessage('')}
                 className="text-rose-500 hover:text-rose-700 text-xs font-bold px-2 py-1"
+              >
+                بستن
+              </button>
+            </div>
+          )}
+
+          {/* پیام راهنما و وضعیت سرویس صوتی */}
+          {speechNotice && (
+            <div className="p-3.5 rounded-xl bg-sky-50 dark:bg-sky-950/40 border border-sky-200 dark:border-sky-800 flex items-start gap-2.5 text-sky-800 dark:text-sky-200 text-xs leading-relaxed animate-fadeIn">
+              <Info className="w-4 h-4 shrink-0 text-sky-500 mt-0.5" />
+              <p className="flex-1">{speechNotice}</p>
+              <button
+                type="button"
+                onClick={() => setSpeechNotice('')}
+                className="text-sky-500 hover:text-sky-700 text-xs font-bold px-2 py-0.5"
               >
                 بستن
               </button>

@@ -30,11 +30,13 @@ const geminiApiKey = process.env.GEMINI_API_KEY || '';
 let geminiClient: GoogleGenAI | null = null;
 if (geminiApiKey) {
   try {
-    geminiClient = new GoogleGenAI();
+    geminiClient = new GoogleGenAI({ apiKey: geminiApiKey });
     console.log('Gemini AI transcription engine initialized successfully.');
   } catch (err: any) {
     console.warn('Could not initialize Gemini client:', err.message);
   }
+} else {
+  console.log('Notice: GEMINI_API_KEY is not set. Server AI transcription fallback requires GEMINI_API_KEY in .env or docker-compose.yml.');
 }
 
 import zlib from 'zlib';
