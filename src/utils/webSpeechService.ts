@@ -8,6 +8,16 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 
 // بررسی پشتیبانی مرورگر از Web Speech API
+export const isSecureContextEnvironment = (): boolean => {
+  if (typeof window === 'undefined') return true;
+  if (window.isSecureContext !== undefined) return window.isSecureContext;
+  return (
+    window.location.protocol === 'https:' ||
+    window.location.hostname === 'localhost' ||
+    window.location.hostname === '127.0.0.1'
+  );
+};
+
 export const getSpeechRecognitionClass = () => {
   if (typeof window === 'undefined') return null;
   return (

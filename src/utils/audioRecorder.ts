@@ -1,3 +1,11 @@
+export function isSecureContextEnvironment(): boolean {
+  if (typeof window === 'undefined') return true;
+  if (window.isSecureContext !== undefined) return window.isSecureContext;
+  return window.location.protocol === 'https:' ||
+    window.location.hostname === 'localhost' ||
+    window.location.hostname === '127.0.0.1';
+}
+
 /**
  * Audio Recorder Utility
  * ضبط صدای استاندارد و کراس‌پلتفرم بر پایه MediaRecorder و Web Audio API
@@ -78,6 +86,12 @@ export class SoundRecorder {
     this.chunks = [];
 
     // ۱. دسترسی به جریان صدای میکروفون با فیلترهای استاندارد حذف نویز
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      if (!isSecureContextEnvironment()) {
+        throw new Error('SECURE_CONTEXT_REQUIRED');
+      }
+      throw new Error('مرورگر شما از دریافت صدا یا میکروفون در این بستر پشتیبانی نمی‌کند.');
+    }
     const stream = await navigator.mediaDevices.getUserMedia({
       audio: {
         echoCancellation: true,

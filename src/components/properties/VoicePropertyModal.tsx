@@ -49,6 +49,7 @@ import {
   smartMergeTexts,
   deduplicateAdjacentWords,
   getCleanInterimText,
+  isSecureContextEnvironment,
 } from '../../utils/webSpeechService';
 
 interface VoicePropertyModalProps {
@@ -343,7 +344,9 @@ export const VoicePropertyModal: React.FC<VoicePropertyModalProps> = ({
         // اگر ضبط صوت فیزیکی به دلیل انحصار مرورگر مسدود شد ولی SpeechRecognition فعال است
         setIsRecording(true);
       } else {
-        if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+        if (err.message === 'SECURE_CONTEXT_REQUIRED' || !isSecureContextEnvironment()) {
+          setErrorMessage('توجه: مرورگرها دسترسی به میکروفون را فقط در پروتکل امن HTTPS مجاز می‌دانند. برای عملکرد در سرور/داکر، آدرس باید دارای HTTPS باشد یا از دامنه با گواهی SSL استفاده کنید.');
+        } else if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
           setErrorMessage('دسترسی به میکروفون رد شد. لطفاً در تنظیمات مرورگر اجازه استفاده از میکروفون را بدهید.');
         } else {
           setErrorMessage('خطا در دسترسی به میکروفون: ' + (err.message || 'نامشخص'));
@@ -571,6 +574,22 @@ export const VoicePropertyModal: React.FC<VoicePropertyModalProps> = ({
                 <p className="text-xs text-emerald-600/80 dark:text-emerald-400/80">
                   در حال بستن پنجره و به‌روزرسانی لیست املاک...
                 </p>
+              </div>
+            </div>
+          )}
+
+          {/* هشدار محیط غیرامن HTTP در داکر یا سرور */}
+          {!isSecureContextEnvironment() && (
+            <div className="p-3.5 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800 text-amber-800 dark:text-amber-200 text-xs leading-relaxed space-y-1.5 animate-fadeIn">
+              <div className="flex items-center gap-2 font-bold text-amber-900 dark:text-amber-100 text-sm">
+                <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
+                <span>نیاز به HTTPS جهت دسترسی به میکروفون در سرور و داکر</span>
+              </div>
+              <p>
+                مرورگرها (گوگل کروم، سافاری، فایرفاکس) به دلایل امنیتی فقط از طریق <strong>HTTPS</strong> یا <strong>localhost</strong> اجازه فعال‌سازی میکروفون و تایپ صوتی را می‌دهند.
+              </p>
+              <div className="bg-amber-100/60 dark:bg-amber-900/40 p-2 rounded-lg font-mono text-[11px] text-amber-950 dark:text-amber-200 dir-ltr text-left">
+                راهکار: راه‌اندازی Nginx Proxy با گواهی SSL (Let's Encrypt) یا افزودن IP سرور به insecure-origins کروم
               </div>
             </div>
           )}
