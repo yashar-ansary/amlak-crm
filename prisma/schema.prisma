@@ -1,0 +1,315 @@
+// مسیر فایل: prisma/schema.prisma
+// مدل‌سازی کامل دیتابیس CRM املاک با Prisma و PostgreSQL
+// طراحی شده برای بنگاه‌ها و آژانس‌های املاک
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// انواع کاربری ملک
+enum PropertyType {
+  APARTMENT   // آپارتمان مسکونی
+  VILLA       // ویلایی
+  COMMERCIAL  // تجاری و مغازه
+  OFFICE      // اداری
+  LAND        // زمین و کلنگی
+  WORKSHOP    // انبار و سوله
+}
+
+// نوع معامله ملک
+enum TransactionType {
+  SALE        // خرید و فروش
+  RENT        // رهن و اجاره
+  PRE_SALE    // پیش‌فروش
+  EXCHANGE    // معاوضه
+}
+
+// وضعیت فایل ملک در سیستم
+enum PropertyStatus {
+  ACTIVE      // فعال و آماده واگذاری
+  UNDER_OFFER // در حال مذاکره / بیعانه
+  DEAL_CLOSED // قرارداد بسته شد
+  ARCHIVED    // بایگانی شده یا انصراف
+}
+
+// نوع مشتری / متقاضی
+enum ClientType {
+  BUYER       // خریدار
+  TENANT      // مستاجر
+  SELLER      // فروشنده / مالک
+  LANDLORD    // موجر / صاحب‌خانه
+  INVESTOR    // سرمایه‌گذار
+}
+
+// وضعیت پیگیری سرنخ و مشتری در پایپ‌لاین
+enum LeadStatus {
+  NEW_LEAD            // سرنخ جدید
+  IN_PROGRESS         // در حال تماس و پیگیری
+  VIEWING_SCHEDULED   // بازدید هماهنگ شده
+  NEGOTIATION         // در مرحله مذاکره
+  CONTRACT_SIGNED     // تبدیل به قرارداد (موفق)
+  LOST                // انصراف یا ناموفق
+}
+
+// وضعیت نوبت بازدید
+enum ViewingStatus {
+  SCHEDULED   // هماهنگ شده
+  COMPLETED   // انجام شد
+  CANCELLED   // لغو شد
+  POSTPONED   // به تعویق افتاد
+}
+
+// نوع قرارداد ملکی
+enum ContractType {
+  SALE_CONTRACT // مبایعه‌نامه فروش
+  RENT_CONTRACT // اجاره‌نامه
+  PRE_SALE      // پیش‌فروش
+}
+
+// وضعیت قرارداد
+enum ContractStatus {
+  DRAFT       // پیش‌نویس
+  ACTIVE      // جاری
+  SETTLED     // تسویه و تحویل کامل
+  TERMINATED  // فسخ شده
+}
+
+// نقش پرسنل و مشاورین
+enum AgentRole {
+  MANAGER     // مدیر معاملات
+  CONSULTANT  // مشاور ارشد
+  JUNIOR      // مشاور مبتدی
+  LEGAL       // کارشناس حقوقی
+}
+
+// جدول مشاوران و کارکنان بنگاه املاک
+model Agent {
+  id              String      @id @default(uuid())
+  fullName        String      // نام و نام خانوادگی
+  phone           String      @unique // تلفن همراه
+  email           String?     @unique // ایمیل
+  role            AgentRole   @default(CONSULTANT)
+  commissionRate  Float       @default(40.0) // درصد پورسانت مشاور از درآمد کمیسیون
+  avatar          String?     // تصویر آواتار
+  isActive        Boolean     @default(true)
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  // روابط
+  properties      Property[]
+  clients         Client[]
+  viewings        ViewingAppointment[]
+  deals           DealContract[]
+  activityLogs    ActivityLog[]
+
+  @@map("agents")
+}
+
+// جدول اطلاعات کامل فایل‌های ملک
+model Property {
+  id                String          @id @default(uuid())
+  propertyCode      String          @unique // کد فایل انحصاری (مثلاً P-1024)
+  title             String          // عنوان آگهی/فایل
+  propertyType      PropertyType    // نوع کاربری
+  transactionType   TransactionType // نوع معامله
+  status            PropertyStatus  @default(ACTIVE)
+
+  // اطلاعات مالی و قیمت
+  priceTotal        BigInt?         // قیمت کل فروش (به تومان)
+  pricePerMeter     BigInt?         // قیمت هر متر مربع (به تومان)
+  deposit           BigInt?         // مبلغ ودیعه / رهن (به تومان)
+  monthlyRent       BigInt?         // اجاره ماهانه (به تومان)
+  isConvertible     Boolean         @default(true) // قابلیت تبدیل رهن و اجاره
+
+  // مشخصات فیزیکی و ساختاری
+  area              Float           // متراژ زیربنا به متر مربع
+  rooms             Int             @default(1) // تعداد اتاق خواب
+  floor             Int?            // شماره طبقه
+  totalFloors       Int?            // کل طبقات ساختمان
+  unitsPerFloor     Int?            // تعداد واحد در طبقه
+  builtYear         Int?            // سال ساخت شمسی (مثلاً ۱۴۰۲)
+  
+  // امکانات رفاهی و تجهیزات
+  hasParking        Boolean         @default(true) // پارکینگ سندی
+  hasElevator       Boolean         @default(true) // آسانسور
+  hasStorage        Boolean         @default(true) // انباری
+  hasBalcony        Boolean         @default(false) // تراس / بالکن
+  coolingSystem     String?         // سیستم سرمایش (کولر آبی، داکت اسپلیت، چیلر)
+  heatingSystem     String?         // سیستم گرمایش (پکیج، رادیاتور، موتورخانه)
+  documentType      String?         // نوع سند (تک‌برگ ملکی، اوقافی، قولنامه‌ای)
+  direction         String?         // جهت ملک (شمالی، جنوبی، دو کله)
+
+  // موقعیت مکانی
+  city              String          @default("تهران")
+  district          String          // محله یا منطقه شهرداری
+  address           String          // آدرس دقیق
+  latitude          Float?          // مختصات جغرافیایی
+  longitude         Float?
+
+  // اطلاعات مالک و دسترسی
+  ownerName         String          // نام مالک
+  ownerPhone        String          // شماره تماس مالک
+  description       String?         @db.Text // توضیحات تکمیلی مشاور
+  images            String[]        // گالری تصاویر ملک
+
+  // ارتباط با مشاور مسئول
+  agentId           String
+  agent             Agent           @relation(fields: [agentId], references: [id], onDelete: Restrict)
+
+  // روابط دیگر
+  viewings          ViewingAppointment[]
+  deals             DealContract[]
+  activityLogs      ActivityLog[]
+
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+
+  @@index([propertyType, transactionType, status])
+  @@index([district, priceTotal])
+  @@map("properties")
+}
+
+// جدول مشتریان، متقاضیان و مالکین (CRM)
+model Client {
+  id                    String        @id @default(uuid())
+  fullName              String        // نام مشتری
+  phone                 String        // شماره موبایل
+  email                 String?       // ایمیل
+  clientType            ClientType    // خریدار، مستاجر، مالک و...
+  leadStatus            LeadStatus    @default(NEW_LEAD)
+  
+  // نیازسنجی و ترجیحات ملکی متقاضی
+  budgetMin             BigInt?       // حداقل بودجه (تومان)
+  budgetMax             BigInt?       // حداکثر بودجه (تومان)
+  preferredDistricts    String[]      // محله‌های مدنظر
+  preferredPropertyTypes PropertyType[] // نوع ملک مورد علاقه
+  preferredMinArea      Float?        // حداقل متراژ مورد نیاز
+  preferredRooms        Int?          // تعداد خواب مطلوب
+
+  notes                 String?       @db.Text // یادداشت‌ها و نیازمندی‌ها
+  source                String?       // منبع ورودی (دیوار، شیپور، مشتری حضوری، معرفی)
+
+  // مشاور اختصاص‌یافته
+  agentId               String?
+  agent                 Agent?        @relation(fields: [agentId], references: [id], onDelete: SetNull)
+
+  // روابط
+  viewings              ViewingAppointment[]
+  deals                 DealContract[]
+  activityLogs          ActivityLog[]
+
+  createdAt             DateTime      @default(now())
+  updatedAt             DateTime      @updatedAt
+
+  @@index([leadStatus, clientType])
+  @@map("clients")
+}
+
+// جدول قرارها و نوبت‌های بازدید ملک
+model ViewingAppointment {
+  id            String        @id @default(uuid())
+  propertyId    String
+  property      Property      @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  clientId      String
+  client        Client        @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  agentId       String
+  agent         Agent         @relation(fields: [agentId], references: [id], onDelete: Restrict)
+
+  scheduledDate String        // تاریخ شمسی بازدید (مثلاً ۱۴۰۴/۰۷/۱۵)
+  scheduledTime String        // ساعت بازدید (مثلاً ۱۷:۳۰)
+  status        ViewingStatus @default(SCHEDULED)
+  feedback      String?       @db.Text // بازخورد و نتیجه بازدید مشتری
+
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  @@map("viewing_appointments")
+}
+
+// جدول قراردادها و معاملات نهایی (مبایعه‌نامه و اجاره‌نامه)
+model DealContract {
+  id                String          @id @default(uuid())
+  contractNumber    String          @unique // شماره ثبت مبایعه‌نامه
+  contractType      ContractType    // فروش یا اجاره
+  status            ContractStatus  @default(ACTIVE)
+
+  propertyId        String
+  property          Property        @relation(fields: [propertyId], references: [id], onDelete: Restrict)
+
+  // طرف اول (خریدار / مستاجر)
+  firstPartyId      String
+  firstParty        Client          @relation(fields: [firstPartyId], references: [id], onDelete: Restrict)
+
+  // طرف دوم (فروشنده / موجر)
+  secondPartyName   String          // نام و نام خانوادگی طرف دوم
+  secondPartyPhone  String          // شماره تماس طرف دوم
+  secondPartyNationalCode String?   // کد ملی
+
+  // ارقام مالی معامله
+  totalAmount       BigInt          // ثمن کل معامله یا مجموع ودیعه
+  rentAmount        BigInt?         // مبلغ اجاره ماهانه در صورت اجاره
+  
+  // کمیسیون قانونی و مالیات
+  totalCommission   BigInt          // کل حق‌الزحمه مشاورین املاک (تومان)
+  agentShareAmount  BigInt          // سهم خالص مشاور پرونده
+  agencyShareAmount BigInt          // سهم دفتر املاک
+  vatAmount         BigInt?         // مالیات بر ارزش افزوده قانونی (۱۰ درصد)
+
+  // تاریخ‌های کلیدی شمسی
+  signingDateJalali String          // تاریخ عقد قرارداد به شمسی
+  handoverDateJalali String?        // تاریخ تحویل ملک به شمسی
+  notaryDateJalali  String?         // تاریخ محضر و انتقال سند به شمسی
+
+  termsConditions   String?         @db.Text // شروط و توضیحات ماده‌های قرارداد
+  agentId           String
+  agent             Agent           @relation(fields: [agentId], references: [id], onDelete: Restrict)
+
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+
+  @@map("deal_contracts")
+}
+
+// جدول تاریخچه پیگیری‌ها، تماس‌ها و رویدادهای مشتری و ملک
+model ActivityLog {
+  id          String      @id @default(uuid())
+  actionType  String      // "call" (تماس)، "meeting" (جلسه)، "note" (یادداشت)، "follow_up" (پیگیری)
+  description String      @db.Text // متن گزارش کار
+  followUpDateJalali String? // موعد پیگیری بعدی به شمسی
+
+  clientId    String?
+  client      Client?     @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  propertyId  String?
+  property    Property?   @relation(fields: [propertyId], references: [id], onDelete: SetNull)
+
+  agentId     String?
+  agent       Agent?      @relation(fields: [agentId], references: [id], onDelete: SetNull)
+
+  createdAt   DateTime    @default(now())
+
+  @@map("activity_logs")
+}
+
+// جدول اطلاعات و مدیریت محله‌ها و مناطق شهری
+model District {
+  id                    String    @id @default(uuid())
+  name                  String    @unique // نام محله
+  municipalityZone      Int       // منطقه شهرداری (۱ تا ۲۲)
+  city                  String    @default("تهران")
+  avgSalePricePerMeter  Decimal?  @db.Decimal(15, 0) // میانگین قیمت متری فروش
+  avgRentDepositPerMeter Decimal? @db.Decimal(15, 0) // میانگین رهن کامل متری
+  tags                  String[]  // برچسب‌ها
+  description           String?   @db.Text
+  status                String    @default("ACTIVE") // ACTIVE / ARCHIVED
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  @@map("districts")
+}
+

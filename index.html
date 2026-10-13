@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <title>سامانه مدیریت املاک و CRM پارس ملک</title>
+    <meta name="description" content="سیستم جامع مدیریت مشتریان، املاک، قراردادها، بازدیدها و محاسبات کمیسیون بنگاه املاک با تقویم شمسی و رابط راست‌چین" />
+    <meta property="og:title" content="سامانه مدیریت املاک و CRM پارس ملک" />
+    <meta property="og:description" content="سیستم جامع مدیریت مشتریان، املاک، قراردادها، بازدیدها و محاسبات کمیسیون بنگاه املاک با تقویم شمسی و رابط راست‌چین" />
+    <meta property="og:type" content="website" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
+    <script>
+      // نادیده‌گیری خطاهای ناهمگام وب‌سوکت HMR در محیط پروکسی ابری AI Studio
+      window.addEventListener('error', function(e) {
+        if (e.message && (e.message.includes('WebSocket') || (e.filename && e.filename.indexOf('@vite/client') !== -1))) {
+          e.stopImmediatePropagation();
+        }
+      }, true);
+      window.addEventListener('unhandledrejection', function(e) {
+        var str = String(e.reason || '');
+        if (str.indexOf('WebSocket') !== -1 || str.indexOf('@vite/client') !== -1) {
+          e.stopImmediatePropagation();
+        }
+      }, true);
+    </script>
+  </head>
+  <body class="bg-[#090c15] text-slate-100 antialiased selection:bg-emerald-500 selection:text-white">
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
+

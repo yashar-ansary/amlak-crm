@@ -1,0 +1,8 @@
+{
+  "name": "سامانه مدیریت املاک و CRM پارس ملک",
+  "description": "سیستم جامع مدیریت مشتریان، املاک، قراردادها، بازدیدها و محاسبات کمیسیون بنگاه املاک با تقویم شمسی و رابط راست‌چین",
+  "requestFramePermissions": [
+    "microphone"
+  ],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
