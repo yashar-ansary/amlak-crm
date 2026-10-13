@@ -341,34 +341,34 @@ export const AdvisorPanelView: React.FC = () => {
       setRecordingSeconds((s) => s + 1);
     }, 1000);
 
-    // ۱. راه‌اندازی تایپ همزمان گفتار با LiveSpeechRecognizer (تایپ ریل‌تایم در آیفون، بدون تکرار کلمات در اندروید و دسکتاپ)
-    try {
-      const recognizer = new LiveSpeechRecognizer('fa-IR');
-      speechRecognizerRef.current = recognizer;
-      recognizer.start({
-        onLiveUpdate: ({ fullText, confirmedText, interimText }) => {
-          setVoiceTranscript(fullText);
-          setConfirmedVoiceTranscript(confirmedText);
-          setInterimVoiceTranscript(interimText);
-        },
-        onError: (errNotice) => {
-          console.warn('Speech recognition notice:', errNotice);
-        },
-      });
-    } catch (speechErr) {
-      console.warn('Speech recognizer init notice:', speechErr);
-    }
-
-    // ۲. راه‌اندازی ضبط باینری صوت جهت ذخیره برای پخش و پردازش هوش مصنوعی
-    try {
-      const recorder = new SoundRecorder();
-      advisorSoundRecorderRef.current = recorder;
-      await recorder.start((vol) => {
-        setVolumeLevel(vol);
-      });
-    } catch (err: any) {
-      console.error('Advisor mic start error:', err);
-      if (!speechRecognizerRef.current) {
+    // ۱. راه‌اندازی تایپ مستقیم گفتار با LiveSpeechRecognizer (تایپ ریل‌تایم، بدون تکرار کلمات در اندروید و دسکتاپ)
+    if (isWebSpeechSupported()) {
+      try {
+        const recognizer = new LiveSpeechRecognizer('fa-IR');
+        speechRecognizerRef.current = recognizer;
+        recognizer.start({
+          onLiveUpdate: ({ fullText, confirmedText, interimText }) => {
+            setVoiceTranscript(fullText);
+            setConfirmedVoiceTranscript(confirmedText);
+            setInterimVoiceTranscript(interimText);
+          },
+          onError: (errNotice) => {
+            console.warn('Speech recognition notice:', errNotice);
+          },
+        });
+      } catch (speechErr) {
+        console.warn('Speech recognizer init notice:', speechErr);
+      }
+    } else {
+      // در مرورگرهای فاقد Web Speech (مانند فایرفاکس)، ضبط فایل صوتی انجام می‌شود
+      try {
+        const recorder = new SoundRecorder();
+        advisorSoundRecorderRef.current = recorder;
+        await recorder.start((vol) => {
+          setVolumeLevel(vol);
+        });
+      } catch (err: any) {
+        console.error('Advisor mic start error:', err);
         setIsRecording(false);
         isRecordingRef.current = false;
         if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);

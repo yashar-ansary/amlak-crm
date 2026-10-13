@@ -6,6 +6,11 @@ coverage/
 *.log
 .env*
 !.env.example
--e 
 *.zip
 *.tar.gz
+.aistudio/
+.ssh*/
+.ssh_deploy_key*
+id_*
+*.key
+*.pub

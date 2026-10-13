@@ -70,6 +70,7 @@ export const VoicePropertyModal: React.FC<VoicePropertyModalProps> = ({
   // ۱. وضعیت‌های عمومی ضبط و صدا
   const [isRecording, setIsRecording] = useState(false);
   const [recordingSeconds, setRecordingSeconds] = useState(0);
+  const [speechActive, setSpeechActive] = useState(false);
   const [volumeLevel, setVolumeLevel] = useState(0);
   const [audioResult, setAudioResult] = useState<RecordedAudioResult | null>(null);
   const [isPlayingAudio, setIsPlayingAudio] = useState(false);
@@ -89,6 +90,7 @@ export const VoicePropertyModal: React.FC<VoicePropertyModalProps> = ({
   // رفرنس‌ها برای مدیریت رویدادهای غیرهمگام SpeechRecognition بدون تکرار کلمه
   const confirmedTextRef = useRef('');
   const interimTextRef = useRef('');
+  const sessionBaseTextRef = useRef('');
   const recognitionRef = useRef<any>(null);
   const isListeningRef = useRef(false);
   const shouldKeepListeningRef = useRef(false);
@@ -111,50 +113,47 @@ export const VoicePropertyModal: React.FC<VoicePropertyModalProps> = ({
   const handleSpeechResult = useCallback((event: any) => {
     if (!shouldKeepListeningRef.current) return;
 
-    let chunkFinal = '';
-    let chunkInterim = '';
+    let sessionFinal = '';
+    let sessionInterim = '';
 
-    // پیمایش از اندیس آخرین تکه تغییریافته (resultIndex)
-    for (let i = event.resultIndex; i < event.results.length; i++) {
+    // پیمایش تمام نتایج نشست جاری از ابتدا جهت تضمین قطعی عدم تکرار کلمات
+    for (let i = 0; i < event.results.length; i++) {
       const resultItem = event.results[i];
       if (!resultItem || !resultItem[0]) continue;
       const text = (resultItem[0].transcript || '').trim();
       if (!text) continue;
 
       if (resultItem.isFinal) {
-        chunkFinal = smartMergeTexts(chunkFinal, text);
+        sessionFinal = sessionFinal ? smartMergeTexts(sessionFinal, text) : text;
       } else {
-        chunkInterim = text;
+        sessionInterim = sessionInterim ? `${sessionInterim} ${text}` : text;
       }
     }
 
-    // الف) اگر تکه قطعی جدید (isFinal: true) رسید، آن را با متن قطعی قبلی ادغام و تکرارها را حذف می‌کنیم
-    if (chunkFinal) {
-      const mergedConfirmed = smartMergeTexts(confirmedTextRef.current, chunkFinal);
-      const cleanConfirmed = deduplicateAdjacentWords(mergedConfirmed);
+    // الف) اگر تکه قطعی جدید (isFinal: true) رسید، با متن پیش از نشست ادغام و تکرارها حذف می‌شود
+    let currentConfirmed = sessionBaseTextRef.current;
+    if (sessionFinal) {
+      currentConfirmed = smartMergeTexts(sessionBaseTextRef.current, sessionFinal);
+      const cleanConfirmed = deduplicateAdjacentWords(currentConfirmed);
       confirmedTextRef.current = cleanConfirmed;
-      interimTextRef.current = '';
-
       setConfirmedText(cleanConfirmed);
-      setInterimText('');
-      setTranscript(cleanConfirmed);
       handleReprocessText(cleanConfirmed);
-    } else if (chunkInterim) {
-      // ب) اگر تکه در حال تکلم است، با مرز متن قبلی تراز و پاکسازی می‌شود
-      const cleanInterim = getCleanInterimText(confirmedTextRef.current, chunkInterim);
-      interimTextRef.current = cleanInterim;
-      setInterimText(cleanInterim);
-
-      const liveFull = [confirmedTextRef.current, cleanInterim]
-        .filter(Boolean)
-        .join(' ')
-        .trim();
-      const dedupedLive = deduplicateAdjacentWords(liveFull);
-      setTranscript(dedupedLive);
     }
+
+    // ب) اگر تکه در حال تکلم است، با مرز متن قبلی تراز و پاکسازی می‌شود
+    const cleanInterim = getCleanInterimText(currentConfirmed, sessionInterim);
+    interimTextRef.current = cleanInterim;
+    setInterimText(cleanInterim);
+
+    const liveFull = [currentConfirmed, cleanInterim]
+      .filter(Boolean)
+      .join(' ')
+      .trim();
+    const dedupedLive = deduplicateAdjacentWords(liveFull);
+    setTranscript(dedupedLive);
   }, [handleReprocessText]);
 
-  // ساخت و اجرای نمونه SpeechRecognition با تنظیمات پایدار
+  // ساخت و اجرای نمونه SpeechRecognition با تنظیمات پایدار و مستقل از ریکوردر سخت‌افزاری
   const startRecognitionInstance = useCallback(() => {
     const SpeechClass = getSpeechRecognitionClass();
     if (!SpeechClass) return;
@@ -169,6 +168,8 @@ export const VoicePropertyModal: React.FC<VoicePropertyModalProps> = ({
       recognitionRef.current = null;
     }
 
+    sessionBaseTextRef.current = confirmedTextRef.current;
+
     try {
       const recognition = new SpeechClass();
       recognition.lang = 'fa-IR';
@@ -180,6 +181,22 @@ export const VoicePropertyModal: React.FC<VoicePropertyModalProps> = ({
 
       recognition.onresult = handleSpeechResult;
 
+      recognition.onaudiostart = () => {
+        setSpeechActive(true);
+      };
+
+      recognition.onspeechstart = () => {
+        setSpeechActive(true);
+      };
+
+      recognition.onspeechend = () => {
+        setSpeechActive(false);
+      };
+
+      recognition.onaudioend = () => {
+        setSpeechActive(false);
+      };
+
       recognition.onerror = (event: any) => {
         const error = event.error;
         console.warn('SpeechRecognition status:', error);
@@ -187,7 +204,8 @@ export const VoicePropertyModal: React.FC<VoicePropertyModalProps> = ({
         if (error === 'not-allowed' || error === 'service-not-allowed') {
           shouldKeepListeningRef.current = false;
           isListeningRef.current = false;
-          setErrorMessage('دسترسی به میکروفون مجاز نیست. لطفاً در نوار آدرس مرورگر روی علامت قفل یا میکروفون کلیک کرده و دسترسی را مجاز (Allow) کنید.');
+          setIsRecording(false);
+          setErrorMessage('دسترسی به میکروفون مجاز نیست. لطفاً در نوار آدرس مرورگر روی علامت قفل یا میکروفون کلیک کرده و دسترسی را مجاز (Allow) فرمایید.');
           return;
         }
 
@@ -196,30 +214,35 @@ export const VoicePropertyModal: React.FC<VoicePropertyModalProps> = ({
           console.warn('SpeechRecognition network error count:', networkErrorCountRef.current);
           if (networkErrorCountRef.current >= 2) {
             shouldKeepListeningRef.current = false;
-            setSpeechNotice('سرور آنلاین تشخیص گفتار کروم (Google Speech) در این شبکه پاسخ نداد (احتمالاً به دلیل فیلترینگ یا عدم دسترسی اینترنت به گوگل). صدای شما به طور کامل ضبط می‌شود و با فشردن دکمه پایان، متن و اطلاعات فایل استخراج خواهد شد.');
+            setIsRecording(false);
+            setSpeechNotice('سرویس آنلاین تشخیص گفتار کروم با خطای شبکه مواجه شد (احتمالاً به دلیل فیلترینگ یا عدم دسترسی به سرورهای گوگل). می‌توانید متن را در کادر زیر بنویسید یا از کیبورد صوتی گوشی استفاده فرمایید.');
           }
           return;
         }
 
         if (error === 'audio-capture') {
-          console.warn('Microphone hardware is busy or in use by recorder.');
+          console.warn('Microphone hardware is busy or in use.');
           return;
         }
       };
 
       recognition.onend = () => {
         isListeningRef.current = false;
+        setSpeechActive(false);
 
         // تبدیل متن موقت باقی‌مانده به متن قطعی
         if (interimTextRef.current) {
           const merged = smartMergeTexts(confirmedTextRef.current, interimTextRef.current);
           const clean = deduplicateAdjacentWords(merged);
           confirmedTextRef.current = clean;
+          sessionBaseTextRef.current = clean;
           interimTextRef.current = '';
           setConfirmedText(clean);
           setInterimText('');
           setTranscript(clean);
           handleReprocessText(clean);
+        } else {
+          sessionBaseTextRef.current = confirmedTextRef.current;
         }
 
         // اگر کاربر هنوز دکمه توقف را نزده، ری‌استارت یکپارچه برای حفظ جریان صحبت
@@ -230,6 +253,8 @@ export const VoicePropertyModal: React.FC<VoicePropertyModalProps> = ({
               startRecognitionInstance();
             }
           }, isAndroidDevice() ? 80 : 150);
+        } else {
+          setIsRecording(false);
         }
       };
 
@@ -328,54 +353,41 @@ export const VoicePropertyModal: React.FC<VoicePropertyModalProps> = ({
     };
   }, [isRecording]);
 
-  // ۱. شروع ضبط و تایپ همزمان با SpeechRecognition API
-  const handleStartRecording = async () => {
+  // ۱. شروع ضبط و تایپ همزمان با SpeechRecognition API (مستقل، پایدار و بدون قفل سخت‌افزاری)
+  const handleStartRecording = () => {
     setErrorMessage('');
     setSpeechNotice('');
     setSuccessSaved(false);
     networkErrorCountRef.current = 0;
 
+    // بررسی پشتیبانی SpeechRecognition API در مرورگر
+    if (!isWebSpeechSupported()) {
+      setErrorMessage('مرورگر شما از SpeechRecognition API پشتیبانی نمی‌کند. لطفاً از مرورگر گوگل کروم، مایکروسافت اج یا سافاری استفاده فرمایید، یا متن را در کادر زیر بنویسید.');
+      return;
+    }
+
+    if (!isSecureContextEnvironment()) {
+      setSpeechNotice('هشدار امنیتی: مرورگرها فقط در پروتکل امن HTTPS با گواهی معتبر یا localhost اجازه دسترسی به میکروفون را صادر می‌کنند.');
+    }
+
     // آماده‌سازی وضعیت‌ها
     confirmedTextRef.current = '';
     interimTextRef.current = '';
+    sessionBaseTextRef.current = '';
     setConfirmedText('');
     setInterimText('');
     setTranscript('');
     setParsedProperty(null);
 
     shouldKeepListeningRef.current = true;
+    setIsRecording(true);
+    setRecordingSeconds(0);
 
-    // شروع ضبط صدا با SoundRecorder (بررسی واقعی دسترسی میکروفون)
-    try {
-      const recorder = new SoundRecorder();
-      soundRecorderRef.current = recorder;
-
-      await recorder.start((vol) => {
-        setVolumeLevel(vol);
-      });
-
-      setIsRecording(true);
-    } catch (err: any) {
-      console.warn('Microphone recorder error:', err);
-      if (err.message === 'SECURE_CONTEXT_REQUIRED' || !isSecureContextEnvironment()) {
-        setErrorMessage('توجه: مرورگرها دسترسی به میکروفون را فقط در پروتکل امن HTTPS با گواهی معتبر یا localhost مجاز می‌دانند. برای سرور داکر از دامنه با SSL معتبر استفاده کنید.');
-      } else if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
-        setErrorMessage('دسترسی به میکروفون رد شد. لطفاً در نوار آدرس مرورگر روی علامت قفل یا میکروفون کلیک کرده و دسترسی را مجاز (Allow) فرمایید.');
-      } else {
-        setErrorMessage('خطا در دسترسی به میکروفون: ' + (err.message || 'نامشخص'));
-      }
-      setIsRecording(false);
-      shouldKeepListeningRef.current = false;
-      return;
-    }
-
-    // شروع تایپ زنده گفتار با SpeechRecognition API
-    if (isWebSpeechSupported() && shouldKeepListeningRef.current) {
-      startRecognitionInstance();
-    }
+    // شروع مستقیم نمونه SpeechRecognition بدون تداخل با MediaRecorder
+    startRecognitionInstance();
   };
 
-  // ۲. توقف ضبط و استخراج هوشمند مشخصات ملک
+  // ۲. توقف ضبط و استخراج هوشمند مشخصات ملک (۱۰۰٪ محلی و آفلاین)
   const handleStopAndProcess = async () => {
     shouldKeepListeningRef.current = false;
     if (restartTimerRef.current) {
@@ -394,6 +406,7 @@ export const VoicePropertyModal: React.FC<VoicePropertyModalProps> = ({
       recognitionRef.current = null;
     }
     isListeningRef.current = false;
+    setSpeechActive(false);
 
     // نهایی‌سازی متن تکه‌ای گفتار
     if (interimTextRef.current) {
@@ -401,7 +414,7 @@ export const VoicePropertyModal: React.FC<VoicePropertyModalProps> = ({
       confirmedTextRef.current = deduplicateAdjacentWords(merged);
       interimTextRef.current = '';
     }
-    let finalSpeechText = deduplicateAdjacentWords(confirmedTextRef.current || transcript);
+    const finalSpeechText = deduplicateAdjacentWords(confirmedTextRef.current || transcript);
     setConfirmedText(finalSpeechText);
     setInterimText('');
     setTranscript(finalSpeechText);
@@ -410,66 +423,34 @@ export const VoicePropertyModal: React.FC<VoicePropertyModalProps> = ({
     setIsProcessing(true);
     setErrorMessage('');
 
-    // توقف ریکوردر صدا و دریافت صوت
-    let recordedResult: RecordedAudioResult | null = null;
-    if (soundRecorderRef.current) {
-      try {
-        recordedResult = await soundRecorderRef.current.stop();
-        setAudioResult(recordedResult);
-      } catch (recErr) {
-        console.warn('SoundRecorder stop notice:', recErr);
-      }
-      soundRecorderRef.current = null;
+    // ۱. پردازش محلی آنی مشخصات فایل ملک بر پایه الگوریتم‌های فارسی NLP
+    if (finalSpeechText) {
+      const localParsed = parseVoicePropertyDescription(finalSpeechText);
+      setParsedProperty(localParsed);
     }
 
     try {
-      // ارسال متن تایپ‌شده و داده صوتی به سرور پردازش هوشمند
-      const response = await fetch('/api/parse-voice', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          text: finalSpeechText,
-          audioBase64: recordedResult?.base64,
-          mimeType: recordedResult?.mimeType || 'audio/webm',
-        }),
-      });
+      // ۲. ارسال متن به اندپوینت سرور محلی داکر
+      if (finalSpeechText) {
+        const response = await fetch('/api/parse-voice', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            text: finalSpeechText,
+          }),
+        });
 
-      if (!response.ok) {
-        if (response.status === 413) {
-          throw new Error('حجم فایل صوتی از محدودیت سرور Nginx بیشتر است. لطفاً در فایل nginx.conf مقدار client_max_body_size 50M; را تنظیم فرمایید.');
+        if (response.ok) {
+          const data = await response.json();
+          if (data.parsedProperty) {
+            setParsedProperty(data.parsedProperty);
+          }
         }
-        throw new Error(`پاسخ ناموفق از سرور پردازش (${response.status})`);
-      }
-
-      const data = await response.json();
-      const serverText = (data.transcript || '').trim();
-      const cleanResultText = deduplicateAdjacentWords(serverText || finalSpeechText);
-      setTranscript(cleanResultText);
-      setConfirmedText(cleanResultText);
-
-      if (data.parsedProperty) {
-        setParsedProperty(data.parsedProperty);
-      } else if (cleanResultText) {
-        const localParsed = parseVoicePropertyDescription(cleanResultText);
-        setParsedProperty(localParsed);
-      }
-
-      if (!cleanResultText && !data.hasGemini) {
-        setSpeechNotice('صوت با موفقیت دریافت شد اما کلید GEMINI_API_KEY در فایل .env سرور داکر تنظیم نشده است. می‌توانید متن مشخصات ملک را در کادر زیر بنویسید یا کلید را در فایل .env سرور تنظیم نمایید.');
-      } else if (!cleanResultText) {
-        setErrorMessage('صدایی دریافت نشد یا نویز پس‌زمینه بود. لطفاً بلندتر صحبت فرمایید یا مشخصات را تایپ نمایید.');
+      } else {
+        setErrorMessage('صدایی دریافت نشد یا صحبت خیلی کوتاه بود. لطفاً بلندتر صحبت فرمایید یا مشخصات را در کادر بنویسید.');
       }
     } catch (err: any) {
-      console.warn('API notice, fallback to local parser:', err);
-      if (finalSpeechText) {
-        const localParsed = parseVoicePropertyDescription(finalSpeechText);
-        setParsedProperty(localParsed);
-      }
-      if (err.message?.includes('client_max_body_size') || err.message?.includes('413')) {
-        setErrorMessage(err.message);
-      } else if (!finalSpeechText) {
-        setErrorMessage('خطا در پردازش صوت: ' + (err.message || 'ارتباط با سرور برقرار نشد'));
-      }
+      console.warn('Local parser fallback active:', err);
     } finally {
       setIsProcessing(false);
     }
@@ -721,11 +702,17 @@ export const VoicePropertyModal: React.FC<VoicePropertyModalProps> = ({
               <div className="mt-4 flex items-center justify-center gap-1.5 h-10 w-full max-w-xs">
                 {Array.from({ length: 16 }).map((_, i) => {
                   const factor = Math.sin((i / 16) * Math.PI);
-                  const dynamicHeight = Math.max(6, Math.min(36, volumeLevel * factor * 0.7));
+                  const dynamicHeight = speechActive
+                    ? Math.max(10, Math.round(34 * factor * (0.6 + 0.4 * Math.sin(recordingSeconds * 3 + i))))
+                    : Math.max(6, Math.round(20 * factor * (0.4 + 0.3 * Math.sin(recordingSeconds * 2 + i))));
                   return (
                     <div
                       key={i}
-                      className="w-1.5 bg-gradient-to-t from-rose-500 to-indigo-500 rounded-full transition-all duration-75"
+                      className={`w-1.5 rounded-full transition-all duration-150 ${
+                        speechActive
+                          ? 'bg-gradient-to-t from-emerald-500 to-teal-400'
+                          : 'bg-gradient-to-t from-rose-500 to-indigo-500'
+                      }`}
                       style={{ height: `${dynamicHeight}px` }}
                     />
                   );

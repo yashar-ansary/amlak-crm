@@ -260,6 +260,8 @@ export class LiveSpeechRecognizer {
       this.recognition = null;
     }
 
+    const sessionBaseText = this.confirmedText;
+
     try {
       const recognition = new SpeechClass();
       recognition.lang = this.lang;
@@ -275,35 +277,36 @@ export class LiveSpeechRecognizer {
         let sessionFinal = '';
         let sessionInterim = '';
 
-        for (let i = event.resultIndex; i < event.results.length; i++) {
+        // پیمایش تمام نتایج نشست جاری از ابتدا جهت تضمین قطعی عدم تکرار کلمات
+        for (let i = 0; i < event.results.length; i++) {
           const item = event.results[i];
           if (!item || !item[0]) continue;
           const transcript = (item[0].transcript || '').trim();
           if (!transcript) continue;
 
           if (item.isFinal) {
-            sessionFinal = smartMergeTexts(sessionFinal, transcript);
+            sessionFinal = sessionFinal ? smartMergeTexts(sessionFinal, transcript) : transcript;
           } else {
-            sessionInterim = transcript;
+            sessionInterim = sessionInterim ? `${sessionInterim} ${transcript}` : transcript;
           }
         }
 
+        let currentConfirmed = sessionBaseText;
         if (sessionFinal) {
-          this.confirmedText = smartMergeTexts(this.confirmedText, sessionFinal);
-          this.currentInterim = '';
-        } else {
-          this.currentInterim = getCleanInterimText(this.confirmedText, sessionInterim);
+          currentConfirmed = smartMergeTexts(sessionBaseText, sessionFinal);
+          this.confirmedText = deduplicateAdjacentWords(currentConfirmed);
         }
 
-        const fullText = [this.confirmedText, this.currentInterim]
-          .filter(Boolean)
-          .join(' ')
-          .trim();
+        const cleanInterim = getCleanInterimText(currentConfirmed, sessionInterim);
+        this.currentInterim = cleanInterim;
+
+        const fullText = [currentConfirmed, cleanInterim].filter(Boolean).join(' ').trim();
+        const dedupedFull = deduplicateAdjacentWords(fullText);
 
         this.onLiveUpdateCallback?.({
-          fullText: deduplicateAdjacentWords(fullText),
+          fullText: dedupedFull,
           confirmedText: this.confirmedText,
-          interimText: this.currentInterim,
+          interimText: cleanInterim,
           isFinal: Boolean(sessionFinal),
         });
       };

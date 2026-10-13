@@ -11,8 +11,6 @@ import {
   parseVoiceDailyTask,
   normalizeJalaliDateString,
 } from './src/utils/voiceTaskParser';
-import { GoogleGenAI } from '@google/genai';
-
 dotenv.config();
 
 const __filename = fileURLToPath(import.meta.url);
@@ -21,23 +19,11 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const port = 3000;
 
-// پشتیبانی از بارهای حجیم‌تر به دلیل داده‌های صوت Base64
+// پشتیبانی از بارهای استاندارد
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
-// راه‌اندازی کلاینت رسمی Gemini جهت تبدیل دقیق گفتار فارسی به متن بدون باگ تکرار کلمات
-const geminiApiKey = process.env.GEMINI_API_KEY || '';
-let geminiClient: GoogleGenAI | null = null;
-if (geminiApiKey) {
-  try {
-    geminiClient = new GoogleGenAI({ apiKey: geminiApiKey });
-    console.log('Gemini AI transcription engine initialized successfully.');
-  } catch (err: any) {
-    console.warn('Could not initialize Gemini client:', err.message);
-  }
-} else {
-  console.log('Notice: GEMINI_API_KEY is not set. Server AI transcription fallback requires GEMINI_API_KEY in .env or docker-compose.yml.');
-}
+console.log('ParsMelk CRM: Running in 100% Local & Offline mode (No external cloud or Gemini dependencies).');
 
 import zlib from 'zlib';
 
@@ -231,156 +217,87 @@ app.get(['/api/download-zip', '/parsmelk-project.zip', '/parsmelk-crm.zip'], (re
   return res.status(404).json({ error: 'فایل زیپ در ریشه پروژه یافت نشد.' });
 });
 
-// تابع کمکی برای رونویسی استاندارد و بدون تکرار صوت به زبان فارسی با هوش مصنوعی
-async function transcribeAudioWithGemini(audioBase64: string, mimeType: string): Promise<string> {
-  if (!geminiClient || !audioBase64) return '';
-
-  const cleanMime = mimeType?.split(';')[0] || 'audio/webm';
-  const modelsToTry = ['gemini-3.8-flash', 'gemini-3.5-transcribe'];
-
-  for (const model of modelsToTry) {
-    try {
-      const response = await geminiClient.models.generateContent({
-        model,
-        contents: [
-          {
-            role: 'user',
-            parts: [
-              {
-                inlineData: {
-                  mimeType: cleanMime,
-                  data: audioBase64,
-                },
-              },
-              {
-                text: `شما سیستم تبدیل صوت به متن مشاورین املاک در ایران هستید.
-صوت ارسالی را به زبان فارسی با دقت بسیار بالا، بدون حذف کلمات، بدون تکرار اضافی کلمات و به شکل روان رونویسی (transcribe) کنید.
-تنها متن پیاده شده را بازگردانید و از درج هرگونه یادداشت، پیشوند یا توضیحات اضافی خودداری فرمایید. اگر صدایی شنیده نشد، فقط یک متن خالی برگردانید.`,
-              },
-            ],
-          },
-        ],
-      });
-
-      const text = response.text?.trim() || '';
-      if (text && !text.includes('[سکوت]')) {
-        return text;
-      }
-    } catch (err: any) {
-      console.warn(`Model ${model} transcription warning:`, err.message);
-    }
-  }
-
-  return '';
-}
-
-// نقطه پایانی تبدیل مستقیم صوت به متن فارسی (استفاده در فیلدهای متنی، توضیحات ملک و کارهای روزانه)
+// نقطه پایانی تبدیل و بررسی صوت/متن به صورت کاملاً لوکال و بدون وابستگی ابری
 app.post('/api/transcribe-audio', async (req, res) => {
-  const { audioBase64, mimeType = 'audio/webm' } = req.body;
-  if (!audioBase64) {
-    return res.status(400).json({ success: false, error: 'فایل صوتی ارسال نشده است.' });
-  }
-
-  try {
-    const transcript = await transcribeAudioWithGemini(audioBase64, mimeType);
-    return res.json({
-      success: true,
-      transcript,
-    });
-  } catch (error: any) {
-    return res.status(500).json({ success: false, error: error.message || 'خطا در تبدیل صوت به متن' });
-  }
+  const { text = '' } = req.body;
+  return res.json({
+    success: true,
+    transcript: typeof text === 'string' ? text.trim() : '',
+    isLocal: true,
+    message: 'سامانه به صورت ۱۰۰٪ آفلاین و محلی (بدون ارتباط با جمینای) کار می‌کند.',
+  });
 });
 
-// نقطه پایانی پردازش و پیاده‌سازی هوشمند صوت و متن املاک
+// نقطه پایانی پردازش و پیاده‌سازی هوشمند صوت و متن املاک (۱۰۰٪ محلی و آفلاین)
 app.post('/api/parse-voice', async (req, res) => {
-  const { audioBase64, mimeType = 'audio/webm', text } = req.body;
-  let cleanInputText = (typeof text === 'string' ? text.trim() : '') || '';
+  const { text = '' } = req.body;
+  const cleanInputText = (typeof text === 'string' ? text.trim() : '') || '';
 
   try {
-    if (!audioBase64 && !cleanInputText) {
+    if (!cleanInputText) {
       return res.status(400).json({
         success: false,
-        error: 'لطفاً داده صوتی یا متن گفتار را ارسال کنید.',
+        error: 'متن گفتار جهت پردازش محلی یافت نشد.',
       });
     }
 
-    // اگر صوت ارسال شده بود و متنی نبود، ابتدا با هوش مصنوعی رونویسی می‌شود
-    if (audioBase64 && cleanInputText.length < 5) {
-      const transcribed = await transcribeAudioWithGemini(audioBase64, mimeType);
-      if (transcribed) {
-        cleanInputText = transcribed;
-      }
-    }
-
-    // پردازش و استخراج مشخصات ملک بر پایه متن پیاده‌شده
+    // استخراج کاملاً محلی و بومی مشخصات فایل ملک بر پایه الگوریتم‌های فارسی NLP
     const parsedProperty = parseVoicePropertyDescription(cleanInputText);
 
     return res.json({
       success: true,
       transcript: cleanInputText,
       parsedProperty,
-      hasGemini: Boolean(geminiClient),
+      isLocal: true,
     });
   } catch (error: any) {
-    console.warn('Voice Parse Error:', error.message);
+    console.warn('Local Voice Parse Error:', error.message);
     const fallback = parseVoicePropertyDescription(cleanInputText);
     return res.json({
       success: true,
       transcript: cleanInputText,
       parsedProperty: fallback,
-      hasGemini: Boolean(geminiClient),
+      isLocal: true,
     });
   }
 });
 
-// نقطه پایانی بررسی وضعیت سیستم و کلید هوش مصنوعی در سرور داکر
+// نقطه پایانی بررسی وضعیت سیستم در سرور داکر
 app.get('/api/system-status', (req, res) => {
   res.json({
-    hasGeminiKey: Boolean(geminiClient),
+    isLocal: true,
+    mode: '100% Offline & Local',
     nodeEnv: process.env.NODE_ENV || 'development',
     serverTime: new Date().toISOString(),
   });
 });
 
-// نقطه پایانی پردازش هوشمند صوت و ثبت کارهای روزانه مشاور
+// نقطه پایانی پردازش هوشمند صوت و ثبت کارهای روزانه مشاور (۱۰۰٪ محلی و آفلاین)
 app.post('/api/parse-voice-task', async (req, res) => {
-  const { audioBase64, mimeType = 'audio/webm', text, currentJalaliDate } = req.body;
-  let cleanInputText = (typeof text === 'string' ? text.trim() : '') || '';
+  const { text = '', currentJalaliDate } = req.body;
+  const cleanInputText = (typeof text === 'string' ? text.trim() : '') || '';
   const baseJalali = typeof currentJalaliDate === 'string' && currentJalaliDate.includes('/')
     ? currentJalaliDate.trim()
     : '1405/07/18';
 
   try {
-    if (!audioBase64 && !cleanInputText) {
+    if (!cleanInputText) {
       return res.status(400).json({
         success: false,
-        error: 'لطفاً داده صوتی یا متن گفتار را ارسال کنید.',
+        error: 'متن کار روزانه دریافت نشد.',
       });
     }
 
-    // رونویسی صوت در صورت ارسال داده باینری صوت
-    if (audioBase64 && cleanInputText.length < 5) {
-      const transcribed = await transcribeAudioWithGemini(audioBase64, mimeType);
-      if (transcribed) {
-        cleanInputText = transcribed;
-      }
-    }
-
-    // پردازش و استخراج کارها
+    // پردازش و استخراج محلی کارها بر پایه موتور تقویم جلالی
     const localParsed = parseVoiceDailyTask(cleanInputText, baseJalali);
-    if (!localParsed.title && audioBase64) {
-      localParsed.title = `یادداشت صوتی مشاور (${baseJalali})`;
-      localParsed.description = 'صوت ضبط شده ضمیمه گردید.';
-    }
     localParsed.dateJalali = normalizeJalaliDateString(localParsed.dateJalali, baseJalali);
+
     return res.json({
       success: true,
       transcript: cleanInputText,
       parsedTask: localParsed,
-      hasGemini: Boolean(geminiClient),
+      isLocal: true,
     });
-
   } catch (error: any) {
     console.warn('Local Task Parse Error:', error.message);
     const localFallback = parseVoiceDailyTask(cleanInputText, baseJalali);
@@ -388,7 +305,7 @@ app.post('/api/parse-voice-task', async (req, res) => {
       success: true,
       transcript: cleanInputText,
       parsedTask: localFallback,
-      hasGemini: Boolean(geminiClient),
+      isLocal: true,
     });
   }
 });

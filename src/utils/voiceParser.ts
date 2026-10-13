@@ -783,7 +783,7 @@ export function parseVoicePropertyDescription(voiceText: string): ParsedVoicePro
 }
 
 /**
- * ارسال صوت یا متن به سرور هوش مصنوعی Gemini جهت پیاده‌سازی و استخراج ساخت‌یافته
+ * ارسال متن به سرور محلی داکر جهت پیاده‌سازی و استخراج ساخت‌یافته (۱۰۰٪ محلی و آفلاین)
  * با فال‌بک خودکار به موتور پردازش کلاینت در صورت بروز هرگونه مشکل یا قطعی شبکه
  */
 export async function parseVoicePropertyWithAI(params: {
