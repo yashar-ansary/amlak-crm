@@ -408,11 +408,29 @@ export const VoicePropertyModal: React.FC<VoicePropertyModalProps> = ({
     setIsRecording(true);
     setRecordingSeconds(0);
 
-    // شروع مستقیم نمونه SpeechRecognition
-    startRecognitionInstance();
+    // ۱. شروع ضبط صدا با SoundRecorder (فعال‌سازی جریان زنده ورودی صوت برای آیفون و تمام مرورگرها)
+    try {
+      const recorder = new SoundRecorder();
+      soundRecorderRef.current = recorder;
+      await recorder.start((vol) => {
+        setVolumeLevel(vol);
+        if (vol > 8) {
+          setSpeechActive(true);
+        } else {
+          setSpeechActive(false);
+        }
+      });
+    } catch (recErr: any) {
+      console.warn('SoundRecorder start error:', recErr);
+    }
+
+    // ۲. در دستگاه‌های اندروید و دسکتاپ، تایپ همزمان و زنده وب‌اسپیچ را اجرا می‌کنیم
+    if (isWebSpeechSupported() && !isIOSDevice()) {
+      startRecognitionInstance();
+    }
   };
 
-  // ۲. توقف ضبط و استخراج هوشمند مشخصات ملک (۱۰۰٪ محلی و آفلاین)
+  // ۲. توقف ضبط و استخراج هوشمند مشخصات ملک (تایپ خودکار و پشتیبانی کامل از آیفون)
   const handleStopAndProcess = async () => {
     shouldKeepListeningRef.current = false;
     if (restartTimerRef.current) {
@@ -433,20 +451,61 @@ export const VoicePropertyModal: React.FC<VoicePropertyModalProps> = ({
     isListeningRef.current = false;
     setSpeechActive(false);
 
-    // نهایی‌سازی متن تکه‌ای گفتار
+    // توقف SoundRecorder و دریافت داده‌های صوتی ضبط‌شده
+    let recordedAudio: RecordedAudioResult | null = null;
+    if (soundRecorderRef.current && soundRecorderRef.current.isRecording) {
+      try {
+        recordedAudio = await soundRecorderRef.current.stop();
+        setAudioResult(recordedAudio);
+      } catch (recErr) {
+        console.warn('SoundRecorder stop error:', recErr);
+      }
+    }
+    soundRecorderRef.current = null;
+
+    // نهایی‌سازی متن تکه‌ای گفتار از وب‌اسپیچ
     if (interimTextRef.current) {
       const merged = smartMergeTexts(confirmedTextRef.current, interimTextRef.current);
       confirmedTextRef.current = deduplicateAdjacentWords(merged);
       interimTextRef.current = '';
     }
-    const finalSpeechText = deduplicateAdjacentWords(confirmedTextRef.current || transcript);
-    setConfirmedText(finalSpeechText);
-    setInterimText('');
-    setTranscript(finalSpeechText);
+    let finalSpeechText = deduplicateAdjacentWords(confirmedTextRef.current || transcript);
 
     setIsRecording(false);
     setIsProcessing(true);
     setErrorMessage('');
+
+    // در صورتی که متن از وب‌اسپیچ دریافت نشده باشد (دقیقاً در آیفون که مرورگر وب‌کیت فاقد وب‌اسپیچ فارسی است)
+    if (!finalSpeechText && recordedAudio && recordedAudio.base64) {
+      setSpeechNotice('در حال تبدیل هوشمند صوت به متن فارسی و استخراج مشخصات...');
+      try {
+        const transRes = await fetch('/api/transcribe-audio', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            audioBase64: recordedAudio.base64,
+            mimeType: recordedAudio.mimeType,
+          }),
+        });
+
+        if (transRes.ok) {
+          const transData = await transRes.json();
+          if (transData.success && transData.transcript) {
+            finalSpeechText = transData.transcript;
+            setTranscript(finalSpeechText);
+            setConfirmedText(finalSpeechText);
+            confirmedTextRef.current = finalSpeechText;
+            setSpeechNotice('');
+          }
+        }
+      } catch (transErr) {
+        console.warn('Transcribe fetch error:', transErr);
+      }
+    }
+
+    setConfirmedText(finalSpeechText);
+    setInterimText('');
+    setTranscript(finalSpeechText);
 
     // ۱. پردازش محلی آنی مشخصات فایل ملک بر پایه الگوریتم‌های فارسی NLP
     if (finalSpeechText) {
@@ -455,13 +514,15 @@ export const VoicePropertyModal: React.FC<VoicePropertyModalProps> = ({
     }
 
     try {
-      // ۲. ارسال متن به اندپوینت سرور محلی داکر
-      if (finalSpeechText) {
+      // ۲. ارسال متن یا صوت به اندپوینت سرور
+      if (finalSpeechText || (recordedAudio && recordedAudio.base64)) {
         const response = await fetch('/api/parse-voice', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             text: finalSpeechText,
+            audioBase64: recordedAudio?.base64,
+            mimeType: recordedAudio?.mimeType,
           }),
         });
 
@@ -469,6 +530,12 @@ export const VoicePropertyModal: React.FC<VoicePropertyModalProps> = ({
           const data = await response.json();
           if (data.parsedProperty) {
             setParsedProperty(data.parsedProperty);
+          }
+          if (!finalSpeechText && data.transcript) {
+            finalSpeechText = data.transcript;
+            setTranscript(finalSpeechText);
+            setConfirmedText(finalSpeechText);
+            confirmedTextRef.current = finalSpeechText;
           }
         }
       } else {

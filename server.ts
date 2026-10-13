@@ -217,21 +217,76 @@ app.get(['/api/download-zip', '/parsmelk-project.zip', '/parsmelk-crm.zip'], (re
   return res.status(404).json({ error: 'فایل زیپ در ریشه پروژه یافت نشد.' });
 });
 
-// نقطه پایانی تبدیل و بررسی صوت/متن به صورت کاملاً لوکال و بدون وابستگی ابری
+// تابع تبدیل فایل صوتی به متن فارسی به کمک هوش مصنوعی (حیاتی برای دستگاه‌های آیفون که مرورگرشان فاقد وب‌اسپیچ فارسی است)
+async function transcribeAudioBase64(audioBase64: string, mimeType: string = 'audio/mp4'): Promise<string> {
+  if (!audioBase64 || audioBase64.length < 50) return '';
+  if (!process.env.GEMINI_API_KEY) return '';
+
+  try {
+    const { GoogleGenAI } = await import('@google/genai');
+    const ai = new GoogleGenAI();
+    const cleanMime = mimeType && mimeType.includes(';') ? mimeType.split(';')[0] : (mimeType || 'audio/mp4');
+    const response = await ai.models.generateContent({
+      model: 'gemini-3.5-transcribe',
+      contents: [
+        {
+          inlineData: {
+            mimeType: cleanMime,
+            data: audioBase64,
+          },
+        },
+        'شما سیستم تبدیل صوت به متن فارسی برای سامانه املاک هستید. تمام کلمات، اعداد، قیمت‌ها، متراژ، نوع ملک و آدرس‌هایی که در این صوت فارسی گفته می‌شود را با دقت بسیار بالا و املای صحیح فارسی پیاده‌سازی و تایپ کنید. فقط متن نهایی پیاده‌شده را بدون هیچ توضیح اضافه یا مقدمه‌ای بنویسید.',
+      ],
+    });
+
+    return (response.text || '').trim();
+  } catch (err: any) {
+    console.warn('Gemini audio transcription error:', err.message);
+    return '';
+  }
+}
+
+// نقطه پایانی تبدیل صوت به متن
 app.post('/api/transcribe-audio', async (req, res) => {
-  const { text = '' } = req.body;
+  const { text = '', audioBase64 = '', mimeType = 'audio/mp4' } = req.body;
+  const cleanText = typeof text === 'string' ? text.trim() : '';
+
+  // ۱. در صورتی که متن از قبل توسط وب‌اسپیچ کلاینت استخراج شده باشد (اندروید و دسکتاپ)
+  if (cleanText) {
+    return res.json({
+      success: true,
+      transcript: cleanText,
+      isLocal: true,
+    });
+  }
+
+  // ۲. تبدیل فایل صوتی ضبط‌شده توسط کلاینت (آیفون و سایر مرورگرها)
+  if (audioBase64 && typeof audioBase64 === 'string') {
+    const transcript = await transcribeAudioBase64(audioBase64, mimeType);
+    if (transcript) {
+      return res.json({
+        success: true,
+        transcript,
+      });
+    }
+  }
+
   return res.json({
-    success: true,
-    transcript: typeof text === 'string' ? text.trim() : '',
-    isLocal: true,
-    message: 'سامانه به صورت ۱۰۰٪ آفلاین و محلی (بدون ارتباط با جمینای) کار می‌کند.',
+    success: false,
+    transcript: '',
+    error: 'صدایی دریافت نشد یا صحبت خیلی کوتاه بود.',
   });
 });
 
-// نقطه پایانی پردازش و پیاده‌سازی هوشمند صوت و متن املاک (۱۰۰٪ محلی و آفلاین)
+// نقطه پایانی پردازش و پیاده‌سازی هوشمند صوت و متن املاک (پشتیبانی همزمان از متن و صوت مستقیم آیفون)
 app.post('/api/parse-voice', async (req, res) => {
-  const { text = '' } = req.body;
-  const cleanInputText = (typeof text === 'string' ? text.trim() : '') || '';
+  const { text = '', audioBase64 = '', mimeType = 'audio/mp4' } = req.body;
+  let cleanInputText = (typeof text === 'string' ? text.trim() : '') || '';
+
+  // در صورتی که متن خالی است اما فایل صوتی ارسال شده است (آیفون)
+  if (!cleanInputText && audioBase64) {
+    cleanInputText = await transcribeAudioBase64(audioBase64, mimeType);
+  }
 
   try {
     if (!cleanInputText) {
@@ -241,7 +296,7 @@ app.post('/api/parse-voice', async (req, res) => {
       });
     }
 
-    // استخراج کاملاً محلی و بومی مشخصات فایل ملک بر پایه الگوریتم‌های فارسی NLP
+    // استخراج محلی مشخصات فایل ملک بر پایه الگوریتم‌های فارسی NLP
     const parsedProperty = parseVoicePropertyDescription(cleanInputText);
 
     return res.json({
@@ -272,13 +327,18 @@ app.get('/api/system-status', (req, res) => {
   });
 });
 
-// نقطه پایانی پردازش هوشمند صوت و ثبت کارهای روزانه مشاور (۱۰۰٪ محلی و آفلاین)
+// نقطه پایانی پردازش هوشمند صوت و ثبت کارهای روزانه مشاور (پشتیبانی همزمان از متن و صوت مستقیم آیفون)
 app.post('/api/parse-voice-task', async (req, res) => {
-  const { text = '', currentJalaliDate } = req.body;
-  const cleanInputText = (typeof text === 'string' ? text.trim() : '') || '';
+  const { text = '', audioBase64 = '', mimeType = 'audio/mp4', currentJalaliDate } = req.body;
+  let cleanInputText = (typeof text === 'string' ? text.trim() : '') || '';
   const baseJalali = typeof currentJalaliDate === 'string' && currentJalaliDate.includes('/')
     ? currentJalaliDate.trim()
     : '1405/07/18';
+
+  // در صورتی که متن خالی است اما فایل صوتی ارسال شده است (آیفون)
+  if (!cleanInputText && audioBase64) {
+    cleanInputText = await transcribeAudioBase64(audioBase64, mimeType);
+  }
 
   try {
     if (!cleanInputText) {

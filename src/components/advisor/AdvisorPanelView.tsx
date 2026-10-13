@@ -358,8 +358,8 @@ export const AdvisorPanelView: React.FC = () => {
       setRecordingSeconds((s) => s + 1);
     }, 1000);
 
-    // ۱. راه‌اندازی تایپ مستقیم گفتار با LiveSpeechRecognizer
-    if (isWebSpeechSupported()) {
+    // ۱. در دستگاه‌های اندروید و دسکتاپ، تایپ زنده با LiveSpeechRecognizer
+    if (isWebSpeechSupported() && !isIOSDevice()) {
       try {
         const recognizer = new LiveSpeechRecognizer('fa-IR');
         speechRecognizerRef.current = recognizer;
