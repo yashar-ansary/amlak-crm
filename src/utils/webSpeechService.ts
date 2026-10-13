@@ -45,6 +45,26 @@ export const isAndroidDevice = (): boolean => {
 };
 
 /**
+ * درخواست صریح دسترسی به میکروفون به شیوه استاندارد
+ * در مرورگر سافاری آیفون (iOS)، بدون فراخوانی getUserMedia در رویداد کلیک کاربر،
+ * مرورگر دیالوگ اجازه دسترسی به میکروفون را نمایش نمی‌دهد و Web Speech مسدود می‌شود.
+ */
+export async function requestMicrophonePermission(): Promise<boolean> {
+  if (typeof navigator === 'undefined' || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    return true;
+  }
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    // بلافاصله ترک‌ها را متوقف می‌کنیم تا سخت‌افزار میکروفون برای SpeechRecognition آزاد باشد
+    stream.getTracks().forEach((track) => track.stop());
+    return true;
+  } catch (err: any) {
+    console.warn('Microphone permission request rejected:', err);
+    return false;
+  }
+}
+
+/**
  * نرمال‌سازی نویسه‌های فارسی برای مقایسه دقیق متنی
  */
 export function normalizePersianSpeechText(text: string): string {
@@ -267,9 +287,10 @@ export class LiveSpeechRecognizer {
       recognition.lang = this.lang;
       recognition.interimResults = true;
       recognition.maxAlternatives = 1;
-      // در کروم اندروید continuous: false مانع از باگ تکرار کلمات می‌شود
-      // در دسکتاپ و iOS سافاری continuous: true جریان پیوسته و بدون قطعی کلمات را فراهم می‌کند
-      recognition.continuous = !isAndroidDevice();
+      // در کروم اندروید و همچنین iOS سافاری، continuous باید false باشد
+      // ۱. در اندروید برای جلوگیری قطعی از باگ تکرار کلمات
+      // ۲. در iOS سافاری، continuous: true باعث لغو فوری و مسدود شدن موتور وب‌کیت می‌گردد
+      recognition.continuous = !isAndroidDevice() && !isIOSDevice();
 
       recognition.onresult = (event: any) => {
         if (!this.isListening) return;
@@ -344,11 +365,12 @@ export class LiveSpeechRecognizer {
         if (this.isListening) {
           // ری‌استارت بلافاصله برای ضبط بدون وقفه در طول صحبت‌های طولانی
           if (this.restartTimer) clearTimeout(this.restartTimer);
+          const restartDelay = isIOSDevice() ? 180 : isAndroidDevice() ? 80 : 100;
           this.restartTimer = setTimeout(() => {
             if (this.isListening) {
               this.createAndStartInstance();
             }
-          }, 60);
+          }, restartDelay);
         } else {
           this.onEndCallback?.();
         }
