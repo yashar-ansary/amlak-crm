@@ -16,7 +16,8 @@ import {
   numberToPersianWords,
 } from '../../utils/jalali';
 import { ParsedVoiceProperty, parseVoicePropertyDescription } from '../../utils/voiceParser';
-import { SoundRecorder } from '../../utils/audioRecorder';
+import { SoundRecorder, isSecureContextEnvironment } from '../../utils/audioRecorder';
+import { getVoiceAuthHeaders } from '../../utils/geminiVoiceConfig';
 import { PriceInputField } from '../common/PriceInputField';
 
 interface PropertyFormModalProps {
@@ -232,7 +233,7 @@ export const PropertyFormModal: React.FC<PropertyFormModalProps> = ({
 
         const res = await fetch('/api/transcribe-audio', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: getVoiceAuthHeaders(),
           body: JSON.stringify({
             audioBase64: audioResult.base64,
             mimeType: audioResult.mimeType,
@@ -250,8 +251,11 @@ export const PropertyFormModal: React.FC<PropertyFormModalProps> = ({
                 : transcribed,
             }));
           } else {
-            setError('صدایی شنیده نشد. لطفاً بلندتر صحبت فرمایید.');
+            setError(data.error || 'صدایی شنیده نشد. لطفاً بلندتر صحبت فرمایید.');
           }
+        } else {
+          const errData = await res.json().catch(() => null);
+          setError(errData?.error || 'خطا در ارتباط با سرور.');
         }
       } catch (err: any) {
         console.error('Dictation error:', err);
@@ -261,6 +265,10 @@ export const PropertyFormModal: React.FC<PropertyFormModalProps> = ({
       }
     } else {
       setError('');
+      if (!isSecureContextEnvironment()) {
+        setError('⚠️ مرورگر به دلایل امنیتی استفاده از میکروفون را فقط در پروتکل امن HTTPS مجاز می‌داند.');
+        return;
+      }
       try {
         const recorder = new SoundRecorder();
         descSoundRecorderRef.current = recorder;
@@ -272,7 +280,11 @@ export const PropertyFormModal: React.FC<PropertyFormModalProps> = ({
         }, 1000);
       } catch (err: any) {
         console.error('Mic start error:', err);
-        setError('دسترسی به میکروفون مجاز نشد. لطفاً در مرورگر اجازه دهید.');
+        if (err?.message === 'SECURE_CONTEXT_REQUIRED' || !isSecureContextEnvironment()) {
+          setError('⚠️ مرورگر به دلایل امنیتی استفاده از میکروفون را فقط در پروتکل امن HTTPS مجاز می‌داند.');
+        } else {
+          setError('دسترسی به میکروفون مجاز نشد. لطفاً در مرورگر اجازه دهید.');
+        }
         setIsRecordingDesc(false);
       }
     }

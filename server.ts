@@ -218,15 +218,57 @@ app.get(['/api/download-zip', '/parsmelk-project.zip', '/parsmelk-crm.zip'], (re
   return res.status(404).json({ error: 'فایل زیپ در ریشه پروژه یافت نشد.' });
 });
 
+// استخراج کلید هوش مصنوعی از هدر درخواست یا بدنه یا متغیرهای محیطی سرور داکر
+function extractGeminiApiKey(req: express.Request): string {
+  const headerKey = req.headers['x-gemini-api-key'];
+  if (typeof headerKey === 'string' && headerKey.trim()) {
+    return headerKey.trim();
+  }
+  const bodyKey = req.body?.geminiApiKey;
+  if (typeof bodyKey === 'string' && bodyKey.trim()) {
+    return bodyKey.trim();
+  }
+  return (process.env.GEMINI_API_KEY || '').trim();
+}
+
+export interface TranscribeResult {
+  success: boolean;
+  transcript: string;
+  error?: string;
+  code?: 'KEY_MISSING' | 'API_ERROR' | 'EMPTY_AUDIO' | 'NETWORK_ERROR';
+}
+
 // تابع تبدیل فایل صوتی به متن فارسی به کمک هوش مصنوعی (حیاتی برای دستگاه‌های آیفون که مرورگرشان فاقد وب‌اسپیچ فارسی است)
-async function transcribeAudioBase64(audioBase64: string, mimeType: string = 'audio/mp4'): Promise<string> {
-  if (!audioBase64 || audioBase64.length < 50) return '';
-  if (!process.env.GEMINI_API_KEY) return '';
+async function transcribeAudioBase64(
+  audioBase64: string,
+  mimeType: string = 'audio/mp4',
+  apiKeyOverride?: string
+): Promise<TranscribeResult> {
+  if (!audioBase64 || audioBase64.length < 50) {
+    return {
+      success: false,
+      transcript: '',
+      error: 'فایل صوتی ارسال‌شده خالی است یا دیتای معتبری در آن یافت نشد.',
+      code: 'EMPTY_AUDIO',
+    };
+  }
+
+  const effectiveKey = (apiKeyOverride || process.env.GEMINI_API_KEY || '').trim();
+
+  if (!effectiveKey) {
+    console.warn('[Gemini Voice Warning] GEMINI_API_KEY is not set on the Docker server or client settings.');
+    return {
+      success: false,
+      transcript: '',
+      error: 'کلید هوش مصنوعی (GEMINI_API_KEY) روی سرور داکر تنظیم نشده است. جهت تبدیل صدای آیفون به متن، لطفاً متغیر GEMINI_API_KEY را در فایل .env یا داکر سرور قرار دهید یا کلید رایگان را در بخش «تنظیمات سامانه» ذخیره فرمایید.',
+      code: 'KEY_MISSING',
+    };
+  }
 
   try {
     const { GoogleGenAI } = await import('@google/genai');
     const ai = new GoogleGenAI({
-      apiKey: process.env.GEMINI_API_KEY,
+      apiKey: effectiveKey,
       httpOptions: { headers: { 'User-Agent': 'aistudio-build' } },
     });
 
@@ -240,8 +282,17 @@ async function transcribeAudioBase64(audioBase64: string, mimeType: string = 'au
 
     const promptText = 'لطفاً فایل صوتی فارسی را با دقت بسیار بالا و کلمه به کلمه پیاده‌سازی و تایپ کنید. تمام کلمات، جملات، تاریخ‌های شمسی (مانند ۲۵ مهر، فردا، پس‌فردا، شنبه، یکشنبه)، روزهای هفته، ساعت‌ها (مانند ساعت ۵ عصر، ۱۶:۰۰)، نام اشخاص، شماره تماس‌ها و جزئیات کار روزانه یا مشخصات ملک را دقیقاً و با املای صحیح فارسی بنویسید. فقط متن فارسی پیاده‌شده را خروجی دهید و هیچ توضیح، پرانتز یا برچسب اضافه‌ای ننویسید.';
 
-    // تلاش نخست با gemini-3.1-flash-lite (سریع‌ترین، پایدارترین و فعال روی پلتفرم) با فال‌بک خودکار
-    const candidateModels = ['gemini-3.1-flash-lite', 'gemini-3.8-flash', 'gemini-3.5-transcribe'];
+    // تلاش به ترتیب با مدل‌های مختلف جهت پشتیبانی تضمینی از کلیدهای شخصی و شرکتی کاربران
+    const candidateModels = [
+      'gemini-3.1-flash-lite',
+      'gemini-2.5-flash',
+      'gemini-1.5-flash',
+      'gemini-2.0-flash',
+      'gemini-3.8-flash',
+    ];
+
+    let lastErrorMsg = '';
+
     for (const modelName of candidateModels) {
       try {
         const response = await ai.models.generateContent({
@@ -260,20 +311,40 @@ async function transcribeAudioBase64(audioBase64: string, mimeType: string = 'au
         const text = (response.text || '').trim();
         // حذف برچسب‌های نشانگر سکوت در صورت خالی بودن فایل
         if (text.includes('[سکوت]') || text.toLowerCase().includes('silence') || text === '[]') {
-          return '';
+          return {
+            success: false,
+            transcript: '',
+            error: 'صدایی در فایل شنیده نشد یا در طول ضبط صحبتی انجام نگرفت.',
+            code: 'EMPTY_AUDIO',
+          };
         }
+
         if (text) {
-          return text;
+          return {
+            success: true,
+            transcript: text,
+          };
         }
       } catch (modelErr: any) {
+        lastErrorMsg = modelErr.message || '';
         console.warn(`Gemini audio model ${modelName} notice:`, modelErr.message?.slice(0, 150));
       }
     }
 
-    return '';
+    return {
+      success: false,
+      transcript: '',
+      error: `عدم پاسخ‌دهی سرور هوش مصنوعی (${lastErrorMsg.slice(0, 90) || 'خطای مدل'}). لطفاً کلید API یا اتصال اینترنت سرور به سرویس گوگل را بررسی فرمایید.`,
+      code: 'API_ERROR',
+    };
   } catch (err: any) {
     console.warn('Gemini audio transcription error:', err.message);
-    return '';
+    return {
+      success: false,
+      transcript: '',
+      error: `خطای پردازش هوش مصنوعی: ${err.message || 'نامشخص'}`,
+      code: 'API_ERROR',
+    };
   }
 }
 
@@ -281,6 +352,7 @@ async function transcribeAudioBase64(audioBase64: string, mimeType: string = 'au
 app.post('/api/transcribe-audio', async (req, res) => {
   const { text = '', audioBase64 = '', mimeType = 'audio/mp4' } = req.body;
   const cleanText = typeof text === 'string' ? text.trim() : '';
+  const apiKey = extractGeminiApiKey(req);
 
   // ۱. در صورتی که متن از قبل توسط وب‌اسپیچ کلاینت استخراج شده باشد (اندروید و دسکتاپ)
   if (cleanText) {
@@ -293,19 +365,26 @@ app.post('/api/transcribe-audio', async (req, res) => {
 
   // ۲. تبدیل فایل صوتی ضبط‌شده توسط کلاینت (آیفون و سایر مرورگرها)
   if (audioBase64 && typeof audioBase64 === 'string') {
-    const transcript = await transcribeAudioBase64(audioBase64, mimeType);
-    if (transcript) {
+    const result = await transcribeAudioBase64(audioBase64, mimeType, apiKey);
+    if (result.success && result.transcript) {
       return res.json({
         success: true,
-        transcript,
+        transcript: result.transcript,
       });
     }
+    return res.json({
+      success: false,
+      transcript: '',
+      error: result.error || 'صدایی دریافت نشد یا صحبت خیلی کوتاه بود.',
+      code: result.code,
+    });
   }
 
   return res.json({
     success: false,
     transcript: '',
-    error: 'صدایی دریافت نشد یا صحبت خیلی کوتاه بود.',
+    error: 'صدایی دریافت نشد یا فایل صوتی ارسال‌نشده است.',
+    code: 'EMPTY_AUDIO',
   });
 });
 
@@ -313,17 +392,24 @@ app.post('/api/transcribe-audio', async (req, res) => {
 app.post('/api/parse-voice', async (req, res) => {
   const { text = '', audioBase64 = '', mimeType = 'audio/mp4' } = req.body;
   let cleanInputText = (typeof text === 'string' ? text.trim() : '') || '';
+  const apiKey = extractGeminiApiKey(req);
+  let transcribeError: string | undefined;
 
   // در صورتی که متن خالی است اما فایل صوتی ارسال شده است (آیفون)
   if (!cleanInputText && audioBase64) {
-    cleanInputText = await transcribeAudioBase64(audioBase64, mimeType);
+    const result = await transcribeAudioBase64(audioBase64, mimeType, apiKey);
+    if (result.success && result.transcript) {
+      cleanInputText = result.transcript;
+    } else {
+      transcribeError = result.error;
+    }
   }
 
   try {
     if (!cleanInputText) {
       return res.status(400).json({
         success: false,
-        error: 'متن گفتار جهت پردازش محلی یافت نشد.',
+        error: transcribeError || 'متن گفتار جهت پردازش محلی یافت نشد.',
       });
     }
 
@@ -348,13 +434,25 @@ app.post('/api/parse-voice', async (req, res) => {
   }
 });
 
-// نقطه پایانی بررسی وضعیت سیستم در سرور داکر
-app.get('/api/system-status', (req, res) => {
+// نقطه پایانی بررسی وضعیت سیستم و موتور صوتی در سرور داکر
+app.get(['/api/system-status', '/api/voice-status'], (req, res) => {
+  const apiKey = extractGeminiApiKey(req);
+  const serverHasKey = Boolean(process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY.trim());
+  const effectiveKeyConfigured = Boolean(apiKey);
+
   res.json({
     isLocal: true,
-    mode: '100% Offline & Local',
+    mode: '100% Offline & Local with Optional AI Voice Transcribe',
     nodeEnv: process.env.NODE_ENV || 'development',
     serverTime: new Date().toISOString(),
+    hasVoiceSupport: true,
+    serverHasGeminiKey: serverHasKey,
+    clientHasGeminiKey: Boolean(apiKey && apiKey !== process.env.GEMINI_API_KEY),
+    effectiveKeyConfigured,
+    keyPreview: effectiveKeyConfigured
+      ? (serverHasKey ? 'فعال از طریق متغیر محیطی سرور (.env)' : 'فعال از طریق تنظیمات مرورگر')
+      : 'کلید GEMINI_API_KEY هنوز تنظیم نشده است',
+    candidateModels: ['gemini-3.1-flash-lite', 'gemini-2.5-flash', 'gemini-1.5-flash', 'gemini-2.0-flash'],
   });
 });
 
@@ -362,20 +460,28 @@ app.get('/api/system-status', (req, res) => {
 app.post('/api/parse-voice-task', async (req, res) => {
   const { text = '', audioBase64 = '', mimeType = 'audio/mp4', currentJalaliDate } = req.body;
   let cleanInputText = (typeof text === 'string' ? text.trim() : '') || '';
+  const apiKey = extractGeminiApiKey(req);
   const baseJalali = typeof currentJalaliDate === 'string' && currentJalaliDate.includes('/')
     ? currentJalaliDate.trim()
     : getCurrentJalaliDate();
 
+  let transcribeError: string | undefined;
+
   // در صورتی که متن خالی است اما فایل صوتی ارسال شده است (آیفون)
   if (!cleanInputText && audioBase64) {
-    cleanInputText = await transcribeAudioBase64(audioBase64, mimeType);
+    const result = await transcribeAudioBase64(audioBase64, mimeType, apiKey);
+    if (result.success && result.transcript) {
+      cleanInputText = result.transcript;
+    } else {
+      transcribeError = result.error;
+    }
   }
 
   try {
     if (!cleanInputText) {
       return res.status(400).json({
         success: false,
-        error: 'متن کار روزانه دریافت نشد.',
+        error: transcribeError || 'متن کار روزانه دریافت نشد یا کلید هوش مصنوعی در سرور یافت نشد.',
       });
     }
 
