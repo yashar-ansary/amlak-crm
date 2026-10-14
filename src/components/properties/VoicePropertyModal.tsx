@@ -103,6 +103,7 @@ export const VoicePropertyModal: React.FC<VoicePropertyModalProps> = ({
   const timerIntervalRef = useRef<any>(null);
   const audioElementRef = useRef<HTMLAudioElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const nativeAudioCaptureRef = useRef<HTMLInputElement | null>(null);
 
   // پردازش مجدد متن توسط تجزیه‌گر هوشمند
   const handleReprocessText = useCallback((textToProcess?: string) => {
@@ -217,8 +218,15 @@ export const VoicePropertyModal: React.FC<VoicePropertyModalProps> = ({
         }
 
         if (error === 'language-not-supported') {
-          console.warn('Language fa-IR notice on iOS Safari');
-          setErrorMessage('زبان فارسی توسط موتور تشخیص گفتار مرورگر این دستگاه پشتیبانی نمی‌شود. لطفاً از مرورگر سافاری یا کروم به‌روز استفاده فرمایید یا متن را در کادر بنویسید.');
+          console.warn('Language notice on speech recognition:', recognition.lang);
+          if (recognition.lang === 'fa-IR') {
+            try {
+              recognition.lang = 'fa';
+              recognition.start();
+              return;
+            } catch {}
+          }
+          setErrorMessage('موتور تشخیص گفتار مرورگر نیاز به بررسی تنظیمات دارد. لطفاً مشخصات ملک را در کادر زیر بنویسید.');
           return;
         }
 
@@ -367,32 +375,74 @@ export const VoicePropertyModal: React.FC<VoicePropertyModalProps> = ({
     };
   }, [isRecording]);
 
-  // ۱. شروع مستقیم ضبط و تایپ همزمان با درخواست استاندارد دسترسی به میکروفون (اجرای صریح در آیفون، اندروید و دسکتاپ)
-  const handleStartRecording = async () => {
+  // دریافت و استخراج مشخصات از فایل صوتی یا ویس‌مموز آیفون
+  const handleNativeAudioFileCapture = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setIsProcessing(true);
+    setSpeechNotice('صوت با موفقیت از ریکوردر گوشی دریافت شد. در حال تبدیل به متن فارسی و استخراج مشخصات ملک...');
+    setErrorMessage('');
+
+    try {
+      const mime = file.type || (isIOSDevice() ? 'audio/mp4' : 'audio/webm');
+      const audioDataUrl = await new Promise<string>((resolve) => {
+        const reader = new FileReader();
+        reader.onloadend = () => resolve(reader.result as string);
+        reader.readAsDataURL(file);
+      });
+
+      const audioBase64 = audioDataUrl.split(',')[1];
+      if (audioBase64) {
+        const transRes = await fetch('/api/transcribe-audio', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            audioBase64,
+            mimeType: mime,
+          }),
+        });
+
+        if (transRes.ok) {
+          const transData = await transRes.json();
+          if (transData.success && transData.transcript) {
+            const finalSpeechText = transData.transcript;
+            setTranscript(finalSpeechText);
+            setConfirmedText(finalSpeechText);
+            confirmedTextRef.current = finalSpeechText;
+            const localParsed = parseVoicePropertyDescription(finalSpeechText);
+            setParsedProperty(localParsed);
+            setSpeechNotice('متن و مشخصات فایل با موفقیت استخراج شد.');
+          } else {
+            setErrorMessage(transData.error || 'صدایی از فایل دریافت نشد.');
+          }
+        }
+      }
+    } catch (err: any) {
+      console.warn('Native audio capture error:', err);
+      setErrorMessage('خطا در پردازش فایل صوتی: ' + (err.message || 'نامشخص'));
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  // ۱. شروع مستقیم ضبط و تایپ همزمان در حین تکلم (پشتیبانی تضمینی از آیفون، اندروید و دسکتاپ)
+  const handleStartRecording = () => {
     setErrorMessage('');
     setSpeechNotice('');
     setSuccessSaved(false);
     networkErrorCountRef.current = 0;
 
-    // بررسی پشتیبانی SpeechRecognition API در مرورگر
-    if (!isWebSpeechSupported()) {
-      setErrorMessage('مرورگر شما از SpeechRecognition API پشتیبانی نمی‌کند. لطفاً از مرورگر گوگل کروم، مایکروسافت اج یا سافاری استفاده فرمایید.');
+    const isCurrentIOS = isIOSDevice();
+
+    // بررسی پشتیبانی SpeechRecognition API در مرورگر (فقط برای غیر آیفون)
+    if (!isCurrentIOS && !isWebSpeechSupported()) {
+      setErrorMessage('مرورگر شما از SpeechRecognition API پشتیبانی نمی‌کند. لطفاً از مرورگر گوگل کروم یا مایکروسافت اج استفاده فرمایید.');
       return;
     }
 
     if (!isSecureContextEnvironment()) {
       setSpeechNotice('هشدار امنیتی: مرورگرها فقط در پروتکل امن HTTPS با گواهی معتبر یا localhost اجازه دسترسی به میکروفون را صادر می‌کنند.');
-    }
-
-    // درخواست صریح دسترسی به میکروفون در همان لمس کاربر (حیاتی برای آیفون جهت باز شدن پنجره دسترسی میکروفون)
-    const hasMicPermission = await requestMicrophonePermission();
-    if (!hasMicPermission) {
-      setErrorMessage(
-        isIOSDevice()
-          ? 'دسترسی به میکروفون در آیفون تایید نشد. لطفاً در پنجره باز شده گزینه Allow را بزنید یا در تنظیمات آیفون (Settings > Safari > Microphone) دسترسی را فعال فرمایید.'
-          : 'دسترسی به میکروفون تایید نشد. لطفاً در پنجره مرورگر اجازه دسترسی (Allow) را صادر فرمایید.'
-      );
-      return;
     }
 
     // آماده‌سازی وضعیت‌ها
@@ -407,25 +457,27 @@ export const VoicePropertyModal: React.FC<VoicePropertyModalProps> = ({
     shouldKeepListeningRef.current = true;
     setIsRecording(true);
     setRecordingSeconds(0);
+    setVolumeLevel(45);
 
-    // ۱. شروع ضبط صدا با SoundRecorder (فعال‌سازی جریان زنده ورودی صوت برای آیفون و تمام مرورگرها)
-    try {
-      const recorder = new SoundRecorder();
-      soundRecorderRef.current = recorder;
-      await recorder.start((vol) => {
-        setVolumeLevel(vol);
-        if (vol > 8) {
-          setSpeechActive(true);
-        } else {
-          setSpeechActive(false);
-        }
-      });
-    } catch (recErr: any) {
-      console.warn('SoundRecorder start error:', recErr);
-    }
-
-    // ۲. در دستگاه‌های اندروید و دسکتاپ، تایپ همزمان و زنده وب‌اسپیچ را اجرا می‌کنیم
-    if (isWebSpeechSupported() && !isIOSDevice()) {
+    if (isCurrentIOS) {
+      // در آیفون: سیستم وب‌کیت اپل فاقد تشخیص گفتار فارسی است؛ لذا صوت مستقیماً با SoundRecorder ضبط و توسط هوش مصنوعی پیاده‌سازی می‌شود
+      try {
+        const recorder = new SoundRecorder();
+        soundRecorderRef.current = recorder;
+        recorder.start((vol) => {
+          setVolumeLevel(vol);
+        }).catch((err) => {
+          console.error('Mic start error on iOS:', err);
+          setIsRecording(false);
+          shouldKeepListeningRef.current = false;
+          setErrorMessage('دسترسی به میکروفون در آیفون مجاز نشد. لطفاً در پنجره تایید گزینه Allow را بزنید یا در Settings > Safari > Microphone دسترسی را فعال نمایید.');
+        });
+        setSpeechNotice('🎙️ در حال ضبط صدای شما در آیفون... لطفاً مشخصات ملک را بیان فرمایید و پس از پایان، دکمه توقف را لمس نمایید.');
+      } catch (e: any) {
+        console.warn('SoundRecorder error on iOS:', e);
+      }
+    } else {
+      // در اندروید و دسکتاپ: شروع همگام تشخیص گفتار زنده
       startRecognitionInstance();
     }
   };
@@ -783,11 +835,34 @@ export const VoicePropertyModal: React.FC<VoicePropertyModalProps> = ({
                     برای شروع، دکمه میکروفون را لمس کنید و صحبت کنید
                   </h4>
                   <p className="text-xs text-slate-500 dark:text-slate-400">
-                    تایپ همزمان در حین تکلم • سیستم هوشمند استخراج مشخصات ملک
+                    {isIOSDevice()
+                      ? 'پشتیبانی تضمینی از آیفون (iOS) • تبدیل صوت به متن و استخراج مشخصات ملک'
+                      : 'تایپ همزمان در حین تکلم • سیستم هوشمند استخراج مشخصات ملک'}
                   </p>
+                  {isIOSDevice() && (
+                    <div className="mt-2.5">
+                      <button
+                        type="button"
+                        onClick={() => nativeAudioCaptureRef.current?.click()}
+                        className="px-3.5 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-700/60 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 text-xs font-medium inline-flex items-center gap-1.5 transition border border-slate-200 dark:border-slate-600 shadow-sm"
+                      >
+                        <Volume2 className="w-3.5 h-3.5 text-indigo-500" />
+                        ضبط با Voice Memos / ضبط‌صوت آیفون
+                      </button>
+                    </div>
+                  )}
                 </>
               )}
             </div>
+
+            {/* ورودی مخفی دریافت فایل صوتی در آیفون */}
+            <input
+              ref={nativeAudioCaptureRef}
+              type="file"
+              accept="audio/*"
+              className="hidden"
+              onChange={handleNativeAudioFileCapture}
+            />
 
             {/* ویژوالایزر امواج صوتی در زمان ضبط */}
             {isRecording && (

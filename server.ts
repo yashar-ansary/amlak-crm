@@ -229,21 +229,48 @@ async function transcribeAudioBase64(audioBase64: string, mimeType: string = 'au
       apiKey: process.env.GEMINI_API_KEY,
       httpOptions: { headers: { 'User-Agent': 'aistudio-build' } },
     });
-    const cleanMime = mimeType && mimeType.includes(';') ? mimeType.split(';')[0] : (mimeType || 'audio/mp4');
-    const response = await ai.models.generateContent({
-      model: 'gemini-3.8-flash',
-      contents: [
-        {
-          inlineData: {
-            mimeType: cleanMime,
-            data: audioBase64,
-          },
-        },
-        'لطفاً فایل صوتی فارسی را با دقت بسیار بالا پیاده‌سازی و تایپ کنید. تمام کلمات، جملات، تاریخ‌های شمسی (مانند ۲۵ مهر)، روزهای هفته، ساعت‌ها، نام اشخاص و جزئیات کار یا ملک را عیناً و با املای دقیق فارسی بنویسید. فقط متن فارسی پیاده‌شده را خروجی دهید و هیچ مقدمه یا توضیح اضافه‌ای ننویسید.',
-      ],
-    });
 
-    return (response.text || '').trim();
+    let cleanMime = mimeType && mimeType.includes(';') ? mimeType.split(';')[0].trim() : (mimeType || 'audio/mp4').trim();
+    if (cleanMime.startsWith('video/')) {
+      cleanMime = 'audio/mp4';
+    }
+    if (!cleanMime || cleanMime === 'audio/unknown') {
+      cleanMime = 'audio/mp4';
+    }
+
+    const promptText = 'لطفاً فایل صوتی فارسی را با دقت بسیار بالا و کلمه به کلمه پیاده‌سازی و تایپ کنید. تمام کلمات، جملات، تاریخ‌های شمسی (مانند ۲۵ مهر، فردا، پس‌فردا، شنبه، یکشنبه)، روزهای هفته، ساعت‌ها (مانند ساعت ۵ عصر، ۱۶:۰۰)، نام اشخاص، شماره تماس‌ها و جزئیات کار روزانه یا مشخصات ملک را دقیقاً و با املای صحیح فارسی بنویسید. فقط متن فارسی پیاده‌شده را خروجی دهید و هیچ توضیح، پرانتز یا برچسب اضافه‌ای ننویسید.';
+
+    // تلاش نخست با gemini-3.1-flash-lite (سریع‌ترین، پایدارترین و فعال روی پلتفرم) با فال‌بک خودکار
+    const candidateModels = ['gemini-3.1-flash-lite', 'gemini-3.8-flash', 'gemini-3.5-transcribe'];
+    for (const modelName of candidateModels) {
+      try {
+        const response = await ai.models.generateContent({
+          model: modelName,
+          contents: [
+            {
+              inlineData: {
+                mimeType: cleanMime,
+                data: audioBase64,
+              },
+            },
+            promptText,
+          ],
+        });
+
+        const text = (response.text || '').trim();
+        // حذف برچسب‌های نشانگر سکوت در صورت خالی بودن فایل
+        if (text.includes('[سکوت]') || text.toLowerCase().includes('silence') || text === '[]') {
+          return '';
+        }
+        if (text) {
+          return text;
+        }
+      } catch (modelErr: any) {
+        console.warn(`Gemini audio model ${modelName} notice:`, modelErr.message?.slice(0, 150));
+      }
+    }
+
+    return '';
   } catch (err: any) {
     console.warn('Gemini audio transcription error:', err.message);
     return '';

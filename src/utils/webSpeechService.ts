@@ -337,13 +337,30 @@ export class LiveSpeechRecognizer {
 
         if (error === 'not-allowed' || error === 'service-not-allowed') {
           this.isListening = false;
-          this.onErrorCallback?.('دسترسی به میکروفون داده نشد. لطفاً در تنظیمات مرورگر مجوز میکروفون را فعال نمایید.', true);
+          this.onErrorCallback?.(
+            isIOSDevice()
+              ? 'دسترسی به میکروفون در آیفون داده نشد. لطفاً در پنجره باز شده دکمه Allow را لمس فرمایید یا در Settings > Safari > Microphone دسترسی را فعال نمایید.'
+              : 'دسترسی به میکروفون داده نشد. لطفاً در تنظیمات مرورگر مجوز میکروفون را فعال نمایید.',
+            true
+          );
+          return;
+        }
+
+        if (error === 'language-not-supported') {
+          console.warn('SpeechRecognition language notice:', this.lang);
+          if (this.lang === 'fa-IR') {
+            this.lang = 'fa';
+            try {
+              this.createAndStartInstance();
+              return;
+            } catch {}
+          }
           return;
         }
 
         if (error === 'network') {
           this.isListening = false;
-          this.onErrorCallback?.('سرور گفتار گوگل در این شبکه در دسترس نیست (خطای network). ضبط مستقیم صدا ادامه دارد.', false);
+          this.onErrorCallback?.('سرور گفتار در این شبکه در دسترس نیست (خطای network). لطفاً اتصال اینترنت را بررسی فرمایید.', false);
           return;
         }
 
