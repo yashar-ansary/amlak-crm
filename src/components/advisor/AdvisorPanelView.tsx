@@ -56,8 +56,7 @@ import {
   TASK_PRIORITY_INFO,
 } from '../../utils/jalali';
 import { parseVoiceDailyTask, ParsedVoiceTask } from '../../utils/voiceTaskParser';
-import { SoundRecorder, isSecureContextEnvironment } from '../../utils/audioRecorder';
-import { getVoiceAuthHeaders } from '../../utils/geminiVoiceConfig';
+import { SoundRecorder } from '../../utils/audioRecorder';
 import {
   LiveSpeechRecognizer,
   isWebSpeechSupported,
@@ -356,13 +355,6 @@ export const AdvisorPanelView: React.FC = () => {
     const isCurrentIOS = isIOSDevice();
 
     if (isCurrentIOS) {
-      if (!isSecureContextEnvironment()) {
-        setIsRecording(false);
-        isRecordingRef.current = false;
-        if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
-        setVoiceNotice('⚠️ مرورگر سافاری در آیفون برای دسترسی به میکروفون نیازمند پروتکل امن HTTPS (گواهی SSL) است. آدرس سامانه با http باز شده است؛ لطفاً دامنه امن با https تنظیم نمایید یا متن کار را دستی تایپ فرمایید.');
-        return;
-      }
       // در آیفون (iOS Safari): وب‌کیت اپل فاقد تشخیص گفتار فارسی است؛ لذا صوت مستقیماً با SoundRecorder ضبط و با هوش مصنوعی سرور با دقت ۱۰۰٪ پیاده‌سازی و ثبت تقویم می‌شود
       try {
         const recorder = new SoundRecorder();
@@ -374,11 +366,7 @@ export const AdvisorPanelView: React.FC = () => {
           setIsRecording(false);
           isRecordingRef.current = false;
           if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
-          if (err?.message === 'SECURE_CONTEXT_REQUIRED' || !isSecureContextEnvironment()) {
-            setVoiceNotice('⚠️ مرورگر آیفون (Safari) به دلایل امنیتی فقط بر بستر امن HTTPS اجازه استفاده از میکروفون را می‌دهد. روی سرور خود حتماً دامنه با گواهی SSL / HTTPS تنظیم فرمایید.');
-          } else {
-            setVoiceNotice('دسترسی به میکروفون در آیفون مجاز نشد. لطفاً در پنجره تایید گزینه Allow را بزنید یا در Settings > Safari > Microphone دسترسی را فعال نمایید.');
-          }
+          setVoiceNotice('دسترسی به میکروفون در آیفون مجاز نشد. لطفاً در پنجره تایید گزینه Allow را بزنید یا در Settings > Safari > Microphone دسترسی را فعال نمایید.');
         });
         setVoiceNotice('🎙️ در حال ضبط صدای شما در آیفون... لطفاً مشخصات کار و تاریخ را بیان فرمایید و پس از پایان، دکمه توقف را لمس نمایید.');
       } catch (err: any) {
@@ -457,13 +445,12 @@ export const AdvisorPanelView: React.FC = () => {
       let parsed: ParsedVoiceTask | null = cleanSpoken ? parseVoiceDailyTask(cleanSpoken, todayStr) : null;
 
       // ۲. در صورتی که متن خالی است اما صوت ضبط شده است (حالت آیفون و فال‌بک)
-      let voiceApiError: string | undefined;
       if (!cleanSpoken && effectiveBase64) {
         setVoiceNotice('⏳ در حال تبدیل هوشمند صوت به متن فارسی و استخراج جزئیات کار...');
         try {
           const response = await fetch('/api/parse-voice-task', {
             method: 'POST',
-            headers: getVoiceAuthHeaders(),
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               audioBase64: effectiveBase64,
               mimeType: mimeType || (isIOSDevice() ? 'audio/mp4' : 'audio/webm'),
@@ -495,17 +482,10 @@ export const AdvisorPanelView: React.FC = () => {
               };
             }
           } else {
-            const errData = await response.json().catch(() => null);
-            if (errData?.error) {
-              voiceApiError = errData.error;
-              setVoiceNotice(errData.error);
-            }
             console.warn('API parse-voice-task non-ok status:', response.status);
           }
-        } catch (apiErr: any) {
+        } catch (apiErr) {
           console.warn('API voice task parse error:', apiErr);
-          voiceApiError = 'خطا در ارتباط با سرور جهت پیاده‌سازی صوت: ' + (apiErr.message || 'نامشخص');
-          setVoiceNotice(voiceApiError);
         }
       }
 
@@ -515,9 +495,7 @@ export const AdvisorPanelView: React.FC = () => {
       }
 
       if (!parsed || !cleanSpoken) {
-        if (!voiceApiError) {
-          setVoiceNotice('متن کار تشخیص داده نشد یا صدا خیلی کوتاه بود. لطفاً مجدداً با صدای واضح‌تر صحبت فرمایید یا متن کار را در کادر بنویسید.');
-        }
+        setVoiceNotice('متن کار تشخیص داده نشد یا صدا خیلی کوتاه بود. لطفاً مجدداً با صدای واضح‌تر صحبت فرمایید یا متن کار را در کادر بنویسید.');
         return;
       }
 

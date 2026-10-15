@@ -16,8 +16,13 @@ import {
   numberToPersianWords,
 } from '../../utils/jalali';
 import { ParsedVoiceProperty, parseVoicePropertyDescription } from '../../utils/voiceParser';
-import { SoundRecorder, isSecureContextEnvironment } from '../../utils/audioRecorder';
-import { getVoiceAuthHeaders } from '../../utils/geminiVoiceConfig';
+import {
+  LiveSpeechRecognizer,
+  isWebSpeechSupported,
+  isSecureContextEnvironment,
+  isIOSDevice,
+  smartMergeTexts,
+} from '../../utils/webSpeechService';
 import { PriceInputField } from '../common/PriceInputField';
 
 interface PropertyFormModalProps {
@@ -166,16 +171,19 @@ export const PropertyFormModal: React.FC<PropertyFormModalProps> = ({
   const [isRecordingDesc, setIsRecordingDesc] = useState(false);
   const [isProcessingDesc, setIsProcessingDesc] = useState(false);
   const [descRecordSeconds, setDescRecordSeconds] = useState(0);
-  const descSoundRecorderRef = useRef<SoundRecorder | null>(null);
+  const descRecognizerRef = useRef<LiveSpeechRecognizer | null>(null);
   const descTimerRef = useRef<any>(null);
   const descTextareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const descBaseTextRef = useRef<string>('');
 
   // پاکسازی ریکوردر در صورت بستن مدال
   useEffect(() => {
     if (!isOpen) {
-      if (descSoundRecorderRef.current) {
-        descSoundRecorderRef.current.cancel();
-        descSoundRecorderRef.current = null;
+      if (descRecognizerRef.current) {
+        try {
+          descRecognizerRef.current.stop();
+        } catch {}
+        descRecognizerRef.current = null;
       }
       if (descTimerRef.current) {
         clearInterval(descTimerRef.current);
@@ -216,77 +224,88 @@ export const PropertyFormModal: React.FC<PropertyFormModalProps> = ({
     }));
   };
 
+  const handleFocusDescKeyboard = () => {
+    setError('🎙️ کیبورد گوشی فعال شد! لطفاً دکمه میکروفون 🎙️ پایین کیبورد (کنار دکمه Space) را لمس کرده و توضیحات ملک را بیان فرمایید. متن به‌صورت ۱۰۰٪ آفلاین تایپ می‌شود.');
+    if (descTextareaRef.current) {
+      descTextareaRef.current.focus();
+      descTextareaRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  };
+
   const toggleDescDictation = async () => {
     if (isRecordingDesc) {
-      if (!descSoundRecorderRef.current) return;
       if (descTimerRef.current) {
         clearInterval(descTimerRef.current);
         descTimerRef.current = null;
       }
       setIsRecordingDesc(false);
-      setIsProcessingDesc(true);
-      setError('');
+      setIsProcessingDesc(false);
 
-      try {
-        const audioResult = await descSoundRecorderRef.current.stop();
-        descSoundRecorderRef.current = null;
-
-        const res = await fetch('/api/transcribe-audio', {
-          method: 'POST',
-          headers: getVoiceAuthHeaders(),
-          body: JSON.stringify({
-            audioBase64: audioResult.base64,
-            mimeType: audioResult.mimeType,
-          }),
-        });
-
-        if (res.ok) {
-          const data = await res.json();
-          const transcribed = (data.transcript || '').trim();
-          if (transcribed) {
+      if (descRecognizerRef.current) {
+        try {
+          const finalResult = descRecognizerRef.current.stop();
+          if (finalResult) {
             setFormData((prev) => ({
               ...prev,
               description: prev.description
-                ? `${prev.description.trim()} ${transcribed}`
-                : transcribed,
+                ? smartMergeTexts(prev.description, finalResult)
+                : finalResult,
             }));
-          } else {
-            setError(data.error || 'صدایی شنیده نشد. لطفاً بلندتر صحبت فرمایید.');
           }
-        } else {
-          const errData = await res.json().catch(() => null);
-          setError(errData?.error || 'خطا در ارتباط با سرور.');
-        }
+        } catch {}
+        descRecognizerRef.current = null;
+      }
+      return;
+    }
+
+    setError('');
+
+    // در صورتی که مرورگر از Web Speech API در این بستر امن پشتیبانی می‌کند
+    if (isWebSpeechSupported() && isSecureContextEnvironment()) {
+      setIsRecordingDesc(true);
+      setDescRecordSeconds(0);
+      descBaseTextRef.current = formData.description ? formData.description.trim() : '';
+
+      descTimerRef.current = setInterval(() => {
+        setDescRecordSeconds((s) => s + 1);
+      }, 1000);
+
+      try {
+        const recognizer = new LiveSpeechRecognizer('fa-IR');
+        descRecognizerRef.current = recognizer;
+        recognizer.start({
+          onLiveUpdate: ({ fullText }) => {
+            if (fullText) {
+              const combined = descBaseTextRef.current
+                ? `${descBaseTextRef.current} ${fullText}`
+                : fullText;
+              setFormData((prev) => ({
+                ...prev,
+                description: combined,
+              }));
+            }
+          },
+          onError: (errMsg, isFatal) => {
+            console.warn('Desc speech notice:', errMsg);
+            if (isFatal) {
+              setError(errMsg);
+              setIsRecordingDesc(false);
+              if (descTimerRef.current) clearInterval(descTimerRef.current);
+            }
+          },
+          onEnd: () => {
+            // پایان تکلم
+          },
+        });
       } catch (err: any) {
-        console.error('Dictation error:', err);
-        setError('خطا در تبدیل صوت به متن: ' + (err.message || 'نامشخص'));
-      } finally {
-        setIsProcessingDesc(false);
+        console.warn('Speech recognizer failed:', err);
+        handleFocusDescKeyboard();
+        setIsRecordingDesc(false);
+        if (descTimerRef.current) clearInterval(descTimerRef.current);
       }
     } else {
-      setError('');
-      if (!isSecureContextEnvironment()) {
-        setError('⚠️ مرورگر به دلایل امنیتی استفاده از میکروفون را فقط در پروتکل امن HTTPS مجاز می‌داند.');
-        return;
-      }
-      try {
-        const recorder = new SoundRecorder();
-        descSoundRecorderRef.current = recorder;
-        await recorder.start();
-        setIsRecordingDesc(true);
-        setDescRecordSeconds(0);
-        descTimerRef.current = setInterval(() => {
-          setDescRecordSeconds((s) => s + 1);
-        }, 1000);
-      } catch (err: any) {
-        console.error('Mic start error:', err);
-        if (err?.message === 'SECURE_CONTEXT_REQUIRED' || !isSecureContextEnvironment()) {
-          setError('⚠️ مرورگر به دلایل امنیتی استفاده از میکروفون را فقط در پروتکل امن HTTPS مجاز می‌داند.');
-        } else {
-          setError('دسترسی به میکروفون مجاز نشد. لطفاً در مرورگر اجازه دهید.');
-        }
-        setIsRecordingDesc(false);
-      }
+      // برای آیفون در محیط HTTP یا بدون وب‌اسپیچ: فعال‌سازی دیکته صوتی کیبورد گوشی (۱۰۰٪ آفلاین و بدون نیاز به جمینای)
+      handleFocusDescKeyboard();
     }
   };
 
@@ -822,9 +841,18 @@ export const PropertyFormModal: React.FC<PropertyFormModalProps> = ({
                 )}
                 <button
                   type="button"
+                  onClick={handleFocusDescKeyboard}
+                  title="باز کردن کیبورد جهت استفاده از دکمه میکروفون آیفون (۱۰۰٪ آفلاین)"
+                  className="flex items-center gap-1 text-[11px] px-2 py-1 rounded-lg bg-violet-600/20 text-violet-300 border border-violet-500/30 hover:bg-violet-600/30 transition-all font-medium"
+                >
+                  <Mic className="h-3 w-3 text-violet-400" />
+                  <span>دیکته با کیبورد گوشی (🎙️)</span>
+                </button>
+                <button
+                  type="button"
                   onClick={toggleDescDictation}
                   disabled={isProcessingDesc}
-                  title="تایپ مستقیم با صحبت کردن (ضبط واقعی صدا)"
+                  title="تایپ مستقیم با گفتار در مرورگر (Web Speech API)"
                   className={`flex items-center gap-1.5 text-[11px] px-2.5 py-1 rounded-lg border transition-all ${
                     isRecordingDesc
                       ? 'bg-rose-500/20 text-rose-300 border-rose-500/40 animate-pulse'
@@ -838,14 +866,14 @@ export const PropertyFormModal: React.FC<PropertyFormModalProps> = ({
                   ) : isRecordingDesc ? (
                     <MicOff className="h-3 w-3 text-rose-400" />
                   ) : (
-                    <Mic className="h-3 w-3 text-violet-400" />
+                    <Mic className="h-3 w-3 text-emerald-400" />
                   )}
                   <span>
                     {isProcessingDesc
-                      ? 'در حال تبدیل گفتار به متن...'
+                      ? 'در حال پردازش گفتار...'
                       : isRecordingDesc
-                      ? `در حال ضبط... (${toPersianDigits(descRecordSeconds)} ثانیه) - کلیک برای ثبت`
-                      : 'دیکته صوتی توضیحات'}
+                      ? `در حال شنیدن... (${toPersianDigits(descRecordSeconds)} ثانیه) - کلیک برای توقف`
+                      : 'تایپ زنده صوتی'}
                   </span>
                 </button>
               </div>

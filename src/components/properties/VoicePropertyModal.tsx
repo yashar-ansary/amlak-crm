@@ -31,7 +31,6 @@ import {
   Info,
 } from 'lucide-react';
 import { SoundRecorder, RecordedAudioResult } from '../../utils/audioRecorder';
-import { getVoiceAuthHeaders } from '../../utils/geminiVoiceConfig';
 import { useCrm } from '../../context/CrmContext';
 import { Property } from '../../types/crm';
 import {
@@ -397,7 +396,7 @@ export const VoicePropertyModal: React.FC<VoicePropertyModalProps> = ({
       if (audioBase64) {
         const transRes = await fetch('/api/transcribe-audio', {
           method: 'POST',
-          headers: getVoiceAuthHeaders(),
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             audioBase64,
             mimeType: mime,
@@ -417,9 +416,6 @@ export const VoicePropertyModal: React.FC<VoicePropertyModalProps> = ({
           } else {
             setErrorMessage(transData.error || 'صدایی از فایل دریافت نشد.');
           }
-        } else {
-          const errData = await transRes.json().catch(() => null);
-          setErrorMessage(errData?.error || 'خطا در برقراری ارتباط با سرور.');
         }
       }
     } catch (err: any) {
@@ -464,10 +460,6 @@ export const VoicePropertyModal: React.FC<VoicePropertyModalProps> = ({
     setVolumeLevel(45);
 
     if (isCurrentIOS) {
-      if (!isSecureContextEnvironment()) {
-        setErrorMessage('⚠️ مرورگر سافاری در آیفون برای دسترسی به میکروفون نیازمند پروتکل امن HTTPS (گواهی SSL) است. آدرس سامانه با http باز شده است؛ لطفاً دامنه امن با https تنظیم نمایید یا با دکمه زیر فایل صوتی از Voice Memos انتخاب فرمایید.');
-        return;
-      }
       // در آیفون: سیستم وب‌کیت اپل فاقد تشخیص گفتار فارسی است؛ لذا صوت مستقیماً با SoundRecorder ضبط و توسط هوش مصنوعی پیاده‌سازی می‌شود
       try {
         const recorder = new SoundRecorder();
@@ -478,11 +470,7 @@ export const VoicePropertyModal: React.FC<VoicePropertyModalProps> = ({
           console.error('Mic start error on iOS:', err);
           setIsRecording(false);
           shouldKeepListeningRef.current = false;
-          if (err?.message === 'SECURE_CONTEXT_REQUIRED' || !isSecureContextEnvironment()) {
-            setErrorMessage('⚠️ مرورگر آیفون (Safari) به دلایل امنیتی فقط بر بستر امن HTTPS اجازه استفاده از میکروفون را می‌دهد. روی سرور خود حتماً دامنه با گواهی SSL / HTTPS تنظیم نمایید یا فایل صوتی را آپلود کنید.');
-          } else {
-            setErrorMessage('دسترسی به میکروفون در آیفون مجاز نشد. لطفاً در پنجره تایید گزینه Allow را بزنید یا در Settings > Safari > Microphone دسترسی را فعال نمایید.');
-          }
+          setErrorMessage('دسترسی به میکروفون در آیفون مجاز نشد. لطفاً در پنجره تایید گزینه Allow را بزنید یا در Settings > Safari > Microphone دسترسی را فعال نمایید.');
         });
         setSpeechNotice('🎙️ در حال ضبط صدای شما در آیفون... لطفاً مشخصات ملک را بیان فرمایید و پس از پایان، دکمه توقف را لمس نمایید.');
       } catch (e: any) {
@@ -545,7 +533,7 @@ export const VoicePropertyModal: React.FC<VoicePropertyModalProps> = ({
       try {
         const transRes = await fetch('/api/transcribe-audio', {
           method: 'POST',
-          headers: getVoiceAuthHeaders(),
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             audioBase64: recordedAudio.base64,
             mimeType: recordedAudio.mimeType,
@@ -560,18 +548,10 @@ export const VoicePropertyModal: React.FC<VoicePropertyModalProps> = ({
             setConfirmedText(finalSpeechText);
             confirmedTextRef.current = finalSpeechText;
             setSpeechNotice('');
-          } else if (transData.error) {
-            setErrorMessage(transData.error);
-          }
-        } else {
-          const errData = await transRes.json().catch(() => null);
-          if (errData?.error) {
-            setErrorMessage(errData.error);
           }
         }
-      } catch (transErr: any) {
+      } catch (transErr) {
         console.warn('Transcribe fetch error:', transErr);
-        setErrorMessage('خطا در ارتباط با سرور جهت تبدیل صوت: ' + (transErr.message || 'عدم دسترسی'));
       }
     }
 
@@ -590,7 +570,7 @@ export const VoicePropertyModal: React.FC<VoicePropertyModalProps> = ({
       if (finalSpeechText || (recordedAudio && recordedAudio.base64)) {
         const response = await fetch('/api/parse-voice', {
           method: 'POST',
-          headers: getVoiceAuthHeaders(),
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             text: finalSpeechText,
             audioBase64: recordedAudio?.base64,
@@ -608,11 +588,6 @@ export const VoicePropertyModal: React.FC<VoicePropertyModalProps> = ({
             setTranscript(finalSpeechText);
             setConfirmedText(finalSpeechText);
             confirmedTextRef.current = finalSpeechText;
-          }
-        } else {
-          const parseErrData = await response.json().catch(() => null);
-          if (parseErrData?.error && !finalSpeechText) {
-            setErrorMessage(parseErrData.error);
           }
         }
       } else {
@@ -1010,6 +985,14 @@ export const VoicePropertyModal: React.FC<VoicePropertyModalProps> = ({
                 <div className="mt-1 text-xs text-slate-500 dark:text-slate-400 flex items-center gap-1 px-1">
                   <span className="text-indigo-500 font-bold">تکه در حال پردازش:</span>
                   <span className="italic text-slate-600 dark:text-slate-300">{interimText}</span>
+                </div>
+              )}
+              {isIOSDevice() && !isRecording && (
+                <div className="mt-2 p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/20 text-[11px] text-amber-300/90 leading-relaxed flex items-center gap-2">
+                  <Sparkles className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                  <span>
+                    <strong>راهکار بومی آیفون:</strong> در کادر بالا ضربه بزنید و دکمه میکروفون روی کیبورد آیفون (دیکته صوتی خود گوشی) را بزنید؛ گفتار شما بدون نیاز به اتصال به سرور تایپ و مشخصات ملک استخراج خواهد شد.
+                  </span>
                 </div>
               )}
             </div>

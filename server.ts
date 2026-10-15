@@ -12,6 +12,7 @@ import {
   normalizeJalaliDateString,
 } from './src/utils/voiceTaskParser';
 import { getCurrentJalaliDate } from './src/utils/jalali';
+
 dotenv.config();
 
 const __filename = fileURLToPath(import.meta.url);
@@ -34,7 +35,6 @@ function packageLatestCodebase(): Buffer | null {
     const projectRoot = process.cwd();
     const excludeDirs = new Set(['node_modules', '.git', 'dist', '.cache', '__pycache__', '.temp']);
     const excludeFiles = new Set(['parsmelk-crm.zip', 'parsmelk-project.zip', 'parsmelk-package.zip', 'parsmelk-project.tar.gz']);
-
     const files: Array<{ full: string; rel: string }> = [];
 
     function walk(dir: string) {
@@ -59,91 +59,92 @@ function packageLatestCodebase(): Buffer | null {
     for (let n = 0; n < 256; n++) {
       let c = n;
       for (let k = 0; k < 8; k++) {
-        c = (c & 1) ? (0xedb88320 ^ (c >>> 1)) : (c >>> 1);
+        c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
       }
-      crcTable[n] = c;
+      crcTable[n] = c >>> 0;
     }
-    function crc32(buf: Buffer): number {
-      let c = 0xffffffff;
+
+    function calcCrc32(buf: Buffer): number {
+      let crc = 0 ^ (-1);
       for (let i = 0; i < buf.length; i++) {
-        c = crcTable[(c ^ buf[i]) & 0xff] ^ (c >>> 8);
+        crc = (crc >>> 8) ^ crcTable[(crc ^ buf[i]) & 0xFF];
       }
-      return (c ^ 0xffffffff) >>> 0;
+      return (crc ^ (-1)) >>> 0;
     }
 
     const fileEntries: Array<{
       rel: string;
-      nameBuffer: Buffer;
-      crc: number;
-      compressedSize: number;
-      uncompressedSize: number;
-      offset: number;
-      localHeader: Buffer;
       compressedData: Buffer;
+      crc: number;
+      uncompressedSize: number;
+      compressedSize: number;
+      localHeader: Buffer;
+      centralHeaderOffset: number;
     }> = [];
 
-    let offset = 0;
+    let currentOffset = 0;
 
-    for (const item of files) {
-      const data = fs.readFileSync(item.full);
-      const uncompressedSize = data.length;
-      const crc = crc32(data);
-      const compressedData = zlib.deflateRawSync(data, { level: 6 });
+    for (const file of files) {
+      const rawData = fs.readFileSync(file.full);
+      const uncompressedSize = rawData.length;
+      const crc = calcCrc32(rawData);
+      const compressedData = zlib.deflateRawSync(rawData);
       const compressedSize = compressedData.length;
-      const nameBuffer = Buffer.from(item.rel, 'utf8');
+      const relPathBuf = Buffer.from(file.rel, 'utf8');
 
-      // هدر محلی فایل در فرمت زیپ استاندارد PKZIP (۳۰ بایت + نام فایل)
-      const localHeader = Buffer.alloc(30 + nameBuffer.length);
-      localHeader.writeUInt32LE(0x04034b50, 0); // امضای هدر فایل محلی
-      localHeader.writeUInt16LE(20, 4); // نسخه ۲۰
-      localHeader.writeUInt16LE(0x0800, 6); // فلگ پرچم UTF-8 برای نام فایل‌ها
-      localHeader.writeUInt16LE(8, 8); // متد فشرده‌سازی Deflate
-      localHeader.writeUInt16LE(0, 10);
-      localHeader.writeUInt16LE(0, 12);
-      localHeader.writeUInt32LE(crc, 14);
-      localHeader.writeUInt32LE(compressedSize, 18);
-      localHeader.writeUInt32LE(uncompressedSize, 22);
-      localHeader.writeUInt16LE(nameBuffer.length, 26);
-      localHeader.writeUInt16LE(0, 28);
-      nameBuffer.copy(localHeader, 30);
+      // هدر لوکال فایل زیپ (۳۰ بایت + نام فایل)
+      const localHeader = Buffer.alloc(30 + relPathBuf.length);
+      localHeader.writeUInt32LE(0x04034b50, 0); // امضا
+      localHeader.writeUInt16LE(20, 4);         // نسخه مورد نیاز (2.0)
+      localHeader.writeUInt16LE(0, 6);          // فلگ‌ها
+      localHeader.writeUInt16LE(8, 8);          // روش فشرده‌سازی Deflate
+      localHeader.writeUInt16LE(0, 10);         // ساعت
+      localHeader.writeUInt16LE(0, 12);         // تاریخ
+      localHeader.writeUInt32LE(crc, 14);       // CRC32
+      localHeader.writeUInt32LE(compressedSize, 18);   // سایز فشرده
+      localHeader.writeUInt32LE(uncompressedSize, 22); // سایز اصلی
+      localHeader.writeUInt16LE(relPathBuf.length, 26);// طول نام فایل
+      localHeader.writeUInt16LE(0, 28);         // طول فیلد اضافه
+      relPathBuf.copy(localHeader, 30);
 
       fileEntries.push({
-        rel: item.rel,
-        nameBuffer,
-        crc,
-        compressedSize,
-        uncompressedSize,
-        offset,
-        localHeader,
+        rel: file.rel,
         compressedData,
+        crc,
+        uncompressedSize,
+        compressedSize,
+        localHeader,
+        centralHeaderOffset: currentOffset,
       });
 
-      offset += localHeader.length + compressedData.length;
+      currentOffset += localHeader.length + compressedData.length;
     }
 
-    const cdOffset = offset;
+    const cdOffset = currentOffset;
     const cdBuffers: Buffer[] = [];
 
     for (const entry of fileEntries) {
-      const cdHeader = Buffer.alloc(46 + entry.nameBuffer.length);
-      cdHeader.writeUInt32LE(0x02014b50, 0); // امضای دیرکتوری مرکزی Central Directory
-      cdHeader.writeUInt16LE(20, 4);
-      cdHeader.writeUInt16LE(20, 6);
-      cdHeader.writeUInt16LE(0x0800, 8); // UTF-8
-      cdHeader.writeUInt16LE(8, 10);
-      cdHeader.writeUInt16LE(0, 12);
-      cdHeader.writeUInt16LE(0, 14);
-      cdHeader.writeUInt32LE(entry.crc, 16);
+      const relPathBuf = Buffer.from(entry.rel, 'utf8');
+      const cdHeader = Buffer.alloc(46 + relPathBuf.length);
+      cdHeader.writeUInt32LE(0x02014b50, 0); // امضای دایرکتوری مرکزی
+      cdHeader.writeUInt16LE(20, 4);         // نسخه سازنده
+      cdHeader.writeUInt16LE(20, 6);         // نسخه مورد نیاز
+      cdHeader.writeUInt16LE(0, 8);          // فلگ‌ها
+      cdHeader.writeUInt16LE(8, 10);         // روش Deflate
+      cdHeader.writeUInt16LE(0, 12);         // ساعت
+      cdHeader.writeUInt16LE(0, 14);         // تاریخ
+      cdHeader.writeUInt32LE(entry.crc, 16); // CRC32
       cdHeader.writeUInt32LE(entry.compressedSize, 20);
       cdHeader.writeUInt32LE(entry.uncompressedSize, 24);
-      cdHeader.writeUInt16LE(entry.nameBuffer.length, 28);
-      cdHeader.writeUInt16LE(0, 30);
-      cdHeader.writeUInt16LE(0, 32);
-      cdHeader.writeUInt16LE(0, 34);
-      cdHeader.writeUInt16LE(0, 36);
-      cdHeader.writeUInt32LE(0, 38);
-      cdHeader.writeUInt32LE(entry.offset, 42);
-      entry.nameBuffer.copy(cdHeader, 46);
+      cdHeader.writeUInt16LE(relPathBuf.length, 28);
+      cdHeader.writeUInt16LE(0, 30);         // طول فیلد اضافه
+      cdHeader.writeUInt16LE(0, 32);         // کامنت
+      cdHeader.writeUInt16LE(0, 34);         // شماره دیسک
+      cdHeader.writeUInt16LE(0, 36);         // صفات داخلی
+      cdHeader.writeUInt32LE(0, 38);         // صفات خارجی
+      cdHeader.writeUInt32LE(entry.centralHeaderOffset, 42); // آفست هدر محلی
+      relPathBuf.copy(cdHeader, 46);
+
       cdBuffers.push(cdHeader);
     }
 
@@ -191,7 +192,6 @@ function packageLatestCodebase(): Buffer | null {
 app.get(['/api/download-zip', '/parsmelk-project.zip', '/parsmelk-crm.zip'], (req, res) => {
   // ۱. ساخت دینامیک جدیدترین نسخه کدها
   const dynamicZip = packageLatestCodebase();
-
   res.setHeader('Content-Type', 'application/zip');
   res.setHeader('Content-Disposition', 'attachment; filename="parsmelk-crm.zip"');
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0');
@@ -218,57 +218,26 @@ app.get(['/api/download-zip', '/parsmelk-project.zip', '/parsmelk-crm.zip'], (re
   return res.status(404).json({ error: 'فایل زیپ در ریشه پروژه یافت نشد.' });
 });
 
-// استخراج کلید هوش مصنوعی از هدر درخواست یا بدنه یا متغیرهای محیطی سرور داکر
-function extractGeminiApiKey(req: express.Request): string {
-  const headerKey = req.headers['x-gemini-api-key'];
-  if (typeof headerKey === 'string' && headerKey.trim()) {
-    return headerKey.trim();
-  }
-  const bodyKey = req.body?.geminiApiKey;
-  if (typeof bodyKey === 'string' && bodyKey.trim()) {
-    return bodyKey.trim();
-  }
-  return (process.env.GEMINI_API_KEY || '').trim();
-}
-
-export interface TranscribeResult {
-  success: boolean;
+// تابع تبدیل فایل صوتی به متن فارسی به کمک هوش مصنوعی (حیاتی برای دستگاه‌های آیفون که مرورگرشان فاقد وب‌اسپیچ فارسی است)
+interface TranscribeResult {
   transcript: string;
   error?: string;
-  code?: 'KEY_MISSING' | 'API_ERROR' | 'EMPTY_AUDIO' | 'NETWORK_ERROR';
 }
 
-// تابع تبدیل فایل صوتی به متن فارسی به کمک هوش مصنوعی (حیاتی برای دستگاه‌های آیفون که مرورگرشان فاقد وب‌اسپیچ فارسی است)
-async function transcribeAudioBase64(
-  audioBase64: string,
-  mimeType: string = 'audio/mp4',
-  apiKeyOverride?: string
-): Promise<TranscribeResult> {
+async function transcribeAudioBase64(audioBase64: string, mimeType: string = 'audio/mp4'): Promise<TranscribeResult> {
   if (!audioBase64 || audioBase64.length < 50) {
+    return { transcript: '', error: 'فایل صوتی ارسال‌شده خالی یا بسیار کوتاه است.' };
+  }
+  if (!process.env.GEMINI_API_KEY) {
     return {
-      success: false,
       transcript: '',
-      error: 'فایل صوتی ارسال‌شده خالی است یا دیتای معتبری در آن یافت نشد.',
-      code: 'EMPTY_AUDIO',
+      error: 'کلید GEMINI_API_KEY در فایل .env سرور تنظیم نشده است. مرورگر آیفون (Safari) فاقد وب‌اسپیچ فارسی در مرورگر است و برای تبدیل صوت نیازمند کلید هوش مصنوعی در سرور می‌باشد.',
     };
   }
-
-  const effectiveKey = (apiKeyOverride || process.env.GEMINI_API_KEY || '').trim();
-
-  if (!effectiveKey) {
-    console.warn('[Gemini Voice Warning] GEMINI_API_KEY is not set on the Docker server or client settings.');
-    return {
-      success: false,
-      transcript: '',
-      error: 'کلید هوش مصنوعی (GEMINI_API_KEY) روی سرور داکر تنظیم نشده است. جهت تبدیل صدای آیفون به متن، لطفاً متغیر GEMINI_API_KEY را در فایل .env یا داکر سرور قرار دهید یا کلید رایگان را در بخش «تنظیمات سامانه» ذخیره فرمایید.',
-      code: 'KEY_MISSING',
-    };
-  }
-
   try {
     const { GoogleGenAI } = await import('@google/genai');
     const ai = new GoogleGenAI({
-      apiKey: effectiveKey,
+      apiKey: process.env.GEMINI_API_KEY,
       httpOptions: { headers: { 'User-Agent': 'aistudio-build' } },
     });
 
@@ -282,16 +251,9 @@ async function transcribeAudioBase64(
 
     const promptText = 'لطفاً فایل صوتی فارسی را با دقت بسیار بالا و کلمه به کلمه پیاده‌سازی و تایپ کنید. تمام کلمات، جملات، تاریخ‌های شمسی (مانند ۲۵ مهر، فردا، پس‌فردا، شنبه، یکشنبه)، روزهای هفته، ساعت‌ها (مانند ساعت ۵ عصر، ۱۶:۰۰)، نام اشخاص، شماره تماس‌ها و جزئیات کار روزانه یا مشخصات ملک را دقیقاً و با املای صحیح فارسی بنویسید. فقط متن فارسی پیاده‌شده را خروجی دهید و هیچ توضیح، پرانتز یا برچسب اضافه‌ای ننویسید.';
 
-    // تلاش به ترتیب با مدل‌های مختلف جهت پشتیبانی تضمینی از کلیدهای شخصی و شرکتی کاربران
-    const candidateModels = [
-      'gemini-3.1-flash-lite',
-      'gemini-2.5-flash',
-      'gemini-1.5-flash',
-      'gemini-2.0-flash',
-      'gemini-3.8-flash',
-    ];
-
-    let lastErrorMsg = '';
+    // تلاش نخست با مدل‌های پیشرفته تشخیص گفتار و فال‌بک
+    const candidateModels = ['gemini-3.5-transcribe', 'gemini-3.1-flash-lite', 'gemini-3.8-flash'];
+    let lastError = '';
 
     for (const modelName of candidateModels) {
       try {
@@ -311,39 +273,34 @@ async function transcribeAudioBase64(
         const text = (response.text || '').trim();
         // حذف برچسب‌های نشانگر سکوت در صورت خالی بودن فایل
         if (text.includes('[سکوت]') || text.toLowerCase().includes('silence') || text === '[]') {
-          return {
-            success: false,
-            transcript: '',
-            error: 'صدایی در فایل شنیده نشد یا در طول ضبط صحبتی انجام نگرفت.',
-            code: 'EMPTY_AUDIO',
-          };
+          return { transcript: '', error: 'صدایی از فایل صوتی شنیده نشد یا در سکوت ضبط شده است.' };
         }
-
         if (text) {
-          return {
-            success: true,
-            transcript: text,
-          };
+          return { transcript: text };
         }
       } catch (modelErr: any) {
-        lastErrorMsg = modelErr.message || '';
-        console.warn(`Gemini audio model ${modelName} notice:`, modelErr.message?.slice(0, 150));
+        lastError = modelErr.message || String(modelErr);
+        console.warn(`Gemini audio model ${modelName} notice:`, lastError.slice(0, 150));
       }
     }
 
+    const isSanctionOrBlocked =
+      lastError.includes('403') ||
+      lastError.includes('location') ||
+      lastError.includes('fetch failed') ||
+      lastError.includes('PERMISSION_DENIED');
+
     return {
-      success: false,
       transcript: '',
-      error: `عدم پاسخ‌دهی سرور هوش مصنوعی (${lastErrorMsg.slice(0, 90) || 'خطای مدل'}). لطفاً کلید API یا اتصال اینترنت سرور به سرویس گوگل را بررسی فرمایید.`,
-      code: 'API_ERROR',
+      error: isSanctionOrBlocked
+        ? 'ارتباط سرور با گوگل برقرار نشد (احتمال مسدود بودن یا تحریم آی‌پی سرور توسط گوگل). لطفاً از سرور با آی‌پی بین‌المللی یا پروکسی در سرور استفاده فرمایید.'
+        : (lastError ? `خطای سرویس هوش مصنوعی: ${lastError.slice(0, 100)}` : 'صدایی از فایل ضبط شده دریافت نشد.'),
     };
   } catch (err: any) {
     console.warn('Gemini audio transcription error:', err.message);
     return {
-      success: false,
       transcript: '',
-      error: `خطای پردازش هوش مصنوعی: ${err.message || 'نامشخص'}`,
-      code: 'API_ERROR',
+      error: `خطا در پردازش صوت: ${err.message || 'نامشخص'}`,
     };
   }
 }
@@ -352,7 +309,6 @@ async function transcribeAudioBase64(
 app.post('/api/transcribe-audio', async (req, res) => {
   const { text = '', audioBase64 = '', mimeType = 'audio/mp4' } = req.body;
   const cleanText = typeof text === 'string' ? text.trim() : '';
-  const apiKey = extractGeminiApiKey(req);
 
   // ۱. در صورتی که متن از قبل توسط وب‌اسپیچ کلاینت استخراج شده باشد (اندروید و دسکتاپ)
   if (cleanText) {
@@ -365,26 +321,24 @@ app.post('/api/transcribe-audio', async (req, res) => {
 
   // ۲. تبدیل فایل صوتی ضبط‌شده توسط کلاینت (آیفون و سایر مرورگرها)
   if (audioBase64 && typeof audioBase64 === 'string') {
-    const result = await transcribeAudioBase64(audioBase64, mimeType, apiKey);
-    if (result.success && result.transcript) {
+    const result = await transcribeAudioBase64(audioBase64, mimeType);
+    if (result.transcript) {
       return res.json({
         success: true,
         transcript: result.transcript,
       });
     }
-    return res.json({
+    return res.status(400).json({
       success: false,
       transcript: '',
       error: result.error || 'صدایی دریافت نشد یا صحبت خیلی کوتاه بود.',
-      code: result.code,
     });
   }
 
-  return res.json({
+  return res.status(400).json({
     success: false,
     transcript: '',
-    error: 'صدایی دریافت نشد یا فایل صوتی ارسال‌نشده است.',
-    code: 'EMPTY_AUDIO',
+    error: 'داده‌های صوتی جهت تبدیل ارسال نشده است.',
   });
 });
 
@@ -392,30 +346,25 @@ app.post('/api/transcribe-audio', async (req, res) => {
 app.post('/api/parse-voice', async (req, res) => {
   const { text = '', audioBase64 = '', mimeType = 'audio/mp4' } = req.body;
   let cleanInputText = (typeof text === 'string' ? text.trim() : '') || '';
-  const apiKey = extractGeminiApiKey(req);
-  let transcribeError: string | undefined;
+  let transcriptionError = '';
 
   // در صورتی که متن خالی است اما فایل صوتی ارسال شده است (آیفون)
   if (!cleanInputText && audioBase64) {
-    const result = await transcribeAudioBase64(audioBase64, mimeType, apiKey);
-    if (result.success && result.transcript) {
-      cleanInputText = result.transcript;
-    } else {
-      transcribeError = result.error;
-    }
+    const result = await transcribeAudioBase64(audioBase64, mimeType);
+    cleanInputText = result.transcript;
+    transcriptionError = result.error || '';
   }
 
   try {
     if (!cleanInputText) {
       return res.status(400).json({
         success: false,
-        error: transcribeError || 'متن گفتار جهت پردازش محلی یافت نشد.',
+        error: transcriptionError || 'متن گفتار جهت پردازش محلی یافت نشد.',
       });
     }
 
     // استخراج محلی مشخصات فایل ملک بر پایه الگوریتم‌های فارسی NLP
     const parsedProperty = parseVoicePropertyDescription(cleanInputText);
-
     return res.json({
       success: true,
       transcript: cleanInputText,
@@ -434,25 +383,16 @@ app.post('/api/parse-voice', async (req, res) => {
   }
 });
 
-// نقطه پایانی بررسی وضعیت سیستم و موتور صوتی در سرور داکر
-app.get(['/api/system-status', '/api/voice-status'], (req, res) => {
-  const apiKey = extractGeminiApiKey(req);
-  const serverHasKey = Boolean(process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY.trim());
-  const effectiveKeyConfigured = Boolean(apiKey);
-
+// نقطه پایانی بررسی وضعیت سیستم در سرور داکر
+app.get('/api/system-status', (req, res) => {
+  const hasGeminiKey = Boolean(process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY.length > 5);
   res.json({
     isLocal: true,
-    mode: '100% Offline & Local with Optional AI Voice Transcribe',
+    mode: '100% Offline & Local',
+    hasGeminiKey,
+    geminiKeyStatus: hasGeminiKey ? 'تنظیم شده و فعال' : 'تنظیم نشده (جهت تبدیل صوت آیفون به متن، در .env کلید را وارد نمایید)',
     nodeEnv: process.env.NODE_ENV || 'development',
     serverTime: new Date().toISOString(),
-    hasVoiceSupport: true,
-    serverHasGeminiKey: serverHasKey,
-    clientHasGeminiKey: Boolean(apiKey && apiKey !== process.env.GEMINI_API_KEY),
-    effectiveKeyConfigured,
-    keyPreview: effectiveKeyConfigured
-      ? (serverHasKey ? 'فعال از طریق متغیر محیطی سرور (.env)' : 'فعال از طریق تنظیمات مرورگر')
-      : 'کلید GEMINI_API_KEY هنوز تنظیم نشده است',
-    candidateModels: ['gemini-3.1-flash-lite', 'gemini-2.5-flash', 'gemini-1.5-flash', 'gemini-2.0-flash'],
   });
 });
 
@@ -460,35 +400,29 @@ app.get(['/api/system-status', '/api/voice-status'], (req, res) => {
 app.post('/api/parse-voice-task', async (req, res) => {
   const { text = '', audioBase64 = '', mimeType = 'audio/mp4', currentJalaliDate } = req.body;
   let cleanInputText = (typeof text === 'string' ? text.trim() : '') || '';
-  const apiKey = extractGeminiApiKey(req);
   const baseJalali = typeof currentJalaliDate === 'string' && currentJalaliDate.includes('/')
     ? currentJalaliDate.trim()
     : getCurrentJalaliDate();
 
-  let transcribeError: string | undefined;
-
+  let transcriptionError = '';
   // در صورتی که متن خالی است اما فایل صوتی ارسال شده است (آیفون)
   if (!cleanInputText && audioBase64) {
-    const result = await transcribeAudioBase64(audioBase64, mimeType, apiKey);
-    if (result.success && result.transcript) {
-      cleanInputText = result.transcript;
-    } else {
-      transcribeError = result.error;
-    }
+    const result = await transcribeAudioBase64(audioBase64, mimeType);
+    cleanInputText = result.transcript;
+    transcriptionError = result.error || '';
   }
 
   try {
     if (!cleanInputText) {
       return res.status(400).json({
         success: false,
-        error: transcribeError || 'متن کار روزانه دریافت نشد یا کلید هوش مصنوعی در سرور یافت نشد.',
+        error: transcriptionError || 'متن کار روزانه دریافت نشد.',
       });
     }
 
     // پردازش و استخراج محلی کارها بر پایه موتور تقویم جلالی
     const localParsed = parseVoiceDailyTask(cleanInputText, baseJalali);
     localParsed.dateJalali = normalizeJalaliDateString(localParsed.dateJalali, baseJalali);
-
     return res.json({
       success: true,
       transcript: cleanInputText,

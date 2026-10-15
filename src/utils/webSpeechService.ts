@@ -50,8 +50,10 @@ export const isAndroidDevice = (): boolean => {
  * مرورگر دیالوگ اجازه دسترسی به میکروفون را نمایش نمی‌دهد و Web Speech مسدود می‌شود.
  */
 export async function requestMicrophonePermission(): Promise<boolean> {
-  if (typeof navigator === 'undefined' || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-    return true;
+  if (typeof navigator === 'undefined') return false;
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    // در محیط‌های فاقد HTTPS (مانند http://IP:3000) در سافاری آیفون، mediaDevices به دلایل امنیتی مسدود است
+    return false;
   }
   try {
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -339,7 +341,7 @@ export class LiveSpeechRecognizer {
           this.isListening = false;
           this.onErrorCallback?.(
             isIOSDevice()
-              ? 'دسترسی به میکروفون در آیفون داده نشد. لطفاً در پنجره باز شده دکمه Allow را لمس فرمایید یا در Settings > Safari > Microphone دسترسی را فعال نمایید.'
+              ? 'دسترسی به میکروفون مرورگر داده نشد. کیبورد فعال شد: دکمه میکروفون 🎙️ پایین کیبورد (کنار Space) را لمس کرده و صحبت فرمایید. یا در تنظیمات آیفون: Settings > Safari > Microphone را Allow فرمایید.'
               : 'دسترسی به میکروفون داده نشد. لطفاً در تنظیمات مرورگر مجوز میکروفون را فعال نمایید.',
             true
           );
